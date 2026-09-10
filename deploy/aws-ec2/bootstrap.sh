@@ -14,13 +14,16 @@ ENV_DIR="/etc/xko"
 ENV_FILE="${ENV_DIR}/nautilus-bridge.env"
 DATA_DIR="/var/lib/xko-nautilus"
 SYSTEMD_UNIT="/etc/systemd/system/xko-nautilus-bridge.service"
+RUNTIME_REQUIREMENTS="deploy/aws-ec2/requirements-runtime.txt"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y \
-  ca-certificates curl git gnupg openssl build-essential \
+apt-get install -y --no-install-recommends \
+  ca-certificates curl git gnupg openssl \
   python3 python3-venv python3-pip \
   debian-keyring debian-archive-keyring apt-transport-https
+apt-get clean
+rm -rf /var/lib/apt/lists/*
 
 # Install Caddy from its official Debian/Ubuntu repository when not already present.
 if ! command -v caddy >/dev/null 2>&1; then
@@ -31,7 +34,9 @@ if ! command -v caddy >/dev/null 2>&1; then
   chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   chmod o+r /etc/apt/sources.list.d/caddy-stable.list
   apt-get update
-  apt-get install -y caddy
+  apt-get install -y --no-install-recommends caddy
+  apt-get clean
+  rm -rf /var/lib/apt/lists/*
 fi
 
 if ! id -u "${APP_USER}" >/dev/null 2>&1; then
@@ -53,8 +58,10 @@ chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
 if [[ ! -x "${APP_DIR}/.venv/bin/python" ]]; then
   sudo -u "${APP_USER}" python3 -m venv "${APP_DIR}/.venv"
 fi
-sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install --upgrade pip wheel
-sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/nautilus_bridge/requirements.txt"
+sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install --no-cache-dir --upgrade pip wheel
+sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install --no-cache-dir \
+  -r "${APP_DIR}/${RUNTIME_REQUIREMENTS}"
+rm -rf "/home/${APP_USER}/.cache/pip" /root/.cache/pip
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   install -o root -g "${APP_USER}" -m 0640 \
