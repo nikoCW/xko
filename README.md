@@ -1,53 +1,89 @@
-# OKX Live Trader — Remote MCP for ChatGPT
+# OKX Live Trader + Nautilus Bridge
 
-A read-only MCP app for OKX public market data.
+`xko` uses a split-process architecture:
 
-## What it exposes
+```text
+ChatGPT
+  -> Render Free MCP gateway (`okx-live-trader-mcp`)
+  -> HTTPS + Bearer token
+  -> AWS EC2 Nautilus bridge
+  -> NautilusTrader risk/execution/reconciliation
+  -> OKX
+```
 
-- `market_scan` — top gainers/losers with liquidity filter
-- `compare_symbols` — BTC/ETH/SOL or arbitrary symbol comparison
-- `get_candles` — recent OHLCV candles + ATR/trend summary
-- `run_live_trader` — full workflow:
-  scan → filter → candidate → benchmark comparison → daily candles → conditional plan
+The public MCP gateway provides OKX market analysis tools and registers human-gated Nautilus intent tools. ChatGPT emits structured trade intent; sizing, risk checks, execution state, and reconciliation live in the Nautilus process.
 
-This server **does not contain any order-placement tools** and does not need an OKX API key.
+## MCP tools
 
-## Deploy on Render
+Market-analysis tools include:
 
-1. Push these files to your GitHub repository.
-2. In Render, create a new **Web Service** from the repository.
-3. Build command:
-   `pip install -r requirements.txt`
-4. Start command:
-   `uvicorn server:app --host 0.0.0.0 --port $PORT`
-5. Health check path:
-   `/health`
-6. After deploy, open:
-   `https://YOUR-SERVICE.onrender.com/health`
-   and verify it returns `"status":"ok"`.
+- `market_scan`
+- `compare_symbols`
+- `get_candles`
+- `run_live_trader`
 
-Your MCP endpoint is:
+Nautilus bridge tools include:
 
-`https://YOUR-SERVICE.onrender.com/mcp`
+- `nautilus_health`
+- `create_trade_intent`
+- `preview_trade_intent`
+- `get_trade_intent`
+- `approve_trade_intent`
+- `submit_trade_intent`
 
-## Add it to ChatGPT
+The current V1 bridge intentionally blocks order submission by default.
 
-In the custom MCP app dialog:
+## Deployment
 
-- Name: `OKX Live Trader`
-- Connection: `Server URL`
-- Server URL: `https://YOUR-SERVICE.onrender.com/mcp`
-- Authentication: `No authentication`
-- Accept the custom MCP warning
-- Create
+### Render — MCP gateway only
 
-Then start a new chat and select / mention the app when available.
+Keep the existing `okx-live-trader-mcp` Render web service. Its normal start command is:
 
-Suggested prompt:
+```text
+uvicorn server:app --host 0.0.0.0 --port $PORT
+```
 
-> @OKX Live Trader 扫描当前 OKX 市场，过滤低流动性标的，找出一个相对 BTC/ETH/SOL 最强的短线机会，检查 90 天日 K，并给出触发、止损、目标和失效条件。只分析，不下单。
+After the EC2 bridge is online, set these environment variables on the existing Render service:
 
-## Local test
+```text
+XKO_NAUTILUS_URL=https://bridge.example.com
+BRIDGE_API_TOKEN=<same random token used by EC2>
+```
+
+Do not create another Render Blueprint bridge service. The stateful bridge has moved to AWS EC2.
+
+### AWS EC2 — Nautilus bridge
+
+Use the deployment package in:
+
+```text
+deploy/aws-ec2/
+```
+
+Start with:
+
+```bash
+git clone https://github.com/nikoCW/xko.git
+cd xko
+sudo bash deploy/aws-ec2/bootstrap.sh
+```
+
+Full instructions, EBS persistence, Elastic IP, HTTPS/Caddy, OKX Trusted IP, systemd, and update workflow are documented in `deploy/aws-ec2/README.md`.
+
+## Safety defaults
+
+Keep these values while validating the Demo path:
+
+```text
+OKX_DEMO=true
+ALLOW_ORDER_SUBMIT=false
+ALLOW_UNPROTECTED_ENTRY=false
+ALLOW_MARKET_ENTRY=false
+```
+
+The bridge uses `stop_loss` for position-risk sizing, but protective SL/TP child execution is not implemented yet. Do not enable real-money order submission until protective exits and restart/reconciliation behavior are implemented and tested end to end.
+
+## Local gateway test
 
 ```powershell
 python -m venv .venv
@@ -56,17 +92,14 @@ pip install -r requirements.txt
 uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Health:
-`http://127.0.0.1:8000/health`
+Gateway health:
 
-MCP:
-`http://127.0.0.1:8000/mcp`
+```text
+http://127.0.0.1:8000/health
+```
 
-Note: ChatGPT cannot connect directly to your localhost URL; local testing is only for verifying the server before deploying it.
+MCP endpoint:
 
-## Security
-
-This version is intentionally read-only and uses only public OKX market-data endpoints.
-Do not add API keys to this public unauthenticated service.
-
-If you later want demo/live trading, add authentication first and use a dedicated OKX sub-account / demo key with minimal permissions.
+```text
+http://127.0.0.1:8000/mcp
+```
