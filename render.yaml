@@ -1,11 +1,12 @@
 services:
-  - type: pserv
+  - type: web
     name: xko-nautilus-bridge
     runtime: python
-    plan: 0.5c-512mb
+    plan: free
     numInstances: 1
     buildCommand: pip install -r nautilus_bridge/requirements.txt
     startCommand: cd nautilus_bridge && python -m nautilus_service.main
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
@@ -20,7 +21,7 @@ services:
       - key: OKX_INSTRUMENT_TYPE
         value: SWAP
       - key: INTENT_DB_PATH
-        value: /var/data/xko-nautilus/intents.db
+        value: /tmp/xko-nautilus-intents.db
       - key: ALLOWED_INSTRUMENTS
         value: BTC-USDT-SWAP.OKX,ETH-USDT-SWAP.OKX,SOL-USDT-SWAP.OKX
       - key: EQUITY_CURRENCY
@@ -51,7 +52,3 @@ services:
         sync: false
       - key: OKX_API_PASSPHRASE
         sync: false
-    disk:
-      name: xko-nautilus-intents
-      mountPath: /var/data/xko-nautilus
-      sizeGB: 1
