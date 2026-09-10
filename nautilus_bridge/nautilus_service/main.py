@@ -54,7 +54,7 @@ def parse_margin_mode(raw: str) -> OKXMarginMode:
 
 
 def make_risk_notional_map(policy: RiskPolicy) -> dict[str, int]:
-    limit = int(os.getenv("MAX_NOTIONAL_PER_ORDER_USDT", "5000"))
+    limit = int(policy.max_notional_per_order_usdt)
     return {instrument_id: limit for instrument_id in policy.allowed_instruments}
 
 
@@ -170,6 +170,17 @@ def main() -> None:
     node.add_data_client_factory(OKX, OKXLiveDataClientFactory)
     node.add_exec_client_factory(OKX, OKXLiveExecClientFactory)
     node.build()
+
+    # Read-only state probe. It is invoked by AIIntentStrategy's timer on the
+    # Nautilus event thread; API threads only read the resulting thread-safe gates.
+    def readiness_probe() -> tuple[bool, bool, bool]:
+        return (
+            bool(getattr(node.portfolio, "initialized", False)),
+            bool(node.kernel.exec_engine.check_connected()),
+            bool(node.kernel.data_engine.check_connected()),
+        )
+
+    runtime.install_readiness_probe(readiness_probe)
 
     start_api(runtime)
     print(
