@@ -101,7 +101,10 @@ def main() -> None:
             "Implement/test protective exits before removing this guard."
         )
 
-    account_id = AccountId.from_str(os.getenv("OKX_ACCOUNT_ID", "OKX-001"))
+    # NautilusTrader 1.231 OKXExecutionClient derives the execution account ID as
+    # "<client-name>-master". With the standard OKX client name this is OKX-master.
+    # Keep the strategy/portfolio account ID identical to the execution client.
+    account_id = AccountId(f"{OKX}-master")
     policy = RiskPolicy.from_env()
     store = IntentStore(os.getenv("INTENT_DB_PATH", "./data/intents.db"))
     runtime = BridgeRuntime(store, policy, "DEMO" if is_demo else "LIVE")
@@ -156,7 +159,7 @@ def main() -> None:
     node.trader.add_strategy(
         AIIntentStrategy(
             config=StrategyConfig(
-                strategy_id=StrategyId.from_str("AI-INTENT-001"),
+                strategy_id=StrategyId("AI-INTENT-001"),
                 use_hyphens_in_client_order_ids=False,
             ),
             runtime=runtime,
