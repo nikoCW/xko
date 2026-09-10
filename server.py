@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import math
+import asyncio
+import hmac
+from contextlib import asynccontextmanager, suppress
 import os
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
+from okx_client import OKXClient
+from rules import POLICY, RuleViolation, dec, grid_plan, instrument_kind
+from state import Store
+from trading import TradingService, account_values
+from monitor import Monitor
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
@@ -18,41 +25,42 @@ STABLE_BASES = {
     "USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDS", "USDG", "PYUSD", "EURT"
 }
 
+client = OKXClient()
+service = TradingService(client, Store())
+monitor = Monitor(service)
+
+
+@asynccontextmanager
+async def lifespan(_server):
+    task = asyncio.create_task(monitor.run()) if os.getenv("MONITOR_ENABLED", "false").lower() == "true" else None
+    try:
+        yield {}
+    finally:
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
 mcp = MCPServer(
-    name="okx-live-trader",
-    title="OKX Live Trader",
-    version="1.0.0",
-    description=(
-        "Read-only OKX market-analysis MCP app. Scans spot markets, compares "
-        "relative strength, retrieves candlesticks, and produces conditional "
-        "trade plans. It never places, amends, or cancels orders."
-    ),
-    instructions=(
-        "Use this app for OKX market-data and short-term trading analysis. "
-        "Prefer run_live_trader for an end-to-end workflow. Always state that "
-        "the output is conditional market analysis, not an executed order. "
-        "Never claim an order was placed because this server is read-only."
-    ),
+    name="okx-live-trader", title="OKX Live Trader", version="2.0.0",
+    description="OKX rules, account review, confirmed FOK orders, spot grid plans and persistent alerts.",
+    instructions=("Use get_rules first. Market signals are not execution. Show the entire preview and wait "
+                  "for the user's explicit confirmation before execute_preview. Never fabricate confirmation. "
+                  "A plan is not an order; acknowledgement is not a fill. Grid planning does not start a bot. "
+                  "Unknown order states require reconciliation, never resubmission."),
+    lifespan=lifespan,
 )
 
-async def okx_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    url = f"{OKX_API_BASE}{path}"
-    headers = {
-        "User-Agent": "okx-live-trader-mcp/1.0",
-        "Accept": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
-        response = await client.get(url, params=params or {})
-        response.raise_for_status()
-        payload = response.json()
 
-    if str(payload.get("code", "")) != "0":
-        raise RuntimeError(f"OKX API error: {payload.get('code')} {payload.get('msg')}")
-    return payload.get("data", [])
+async def okx_get(path: str, params: dict[str, Any] | None = None):
+    return await client.get(path, params)
+
 
 def fnum(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else default
     except (TypeError, ValueError):
         return default
 
@@ -137,8 +145,6 @@ def atr(candles: list[dict[str, Any]], period: int = 14) -> float | None:
 
 def candle_summary(candles: list[dict[str, Any]]) -> dict[str, Any]:
     completed = [c for c in candles if c["confirmed"]]
-    if not completed:
-        completed = candles[:]
     recent20 = completed[-20:] if len(completed) >= 20 else completed
     recent50 = completed[-50:] if len(completed) >= 50 else completed
     a14 = atr(candles, 14)
@@ -167,10 +173,10 @@ def candle_summary(candles: list[dict[str, Any]]) -> dict[str, Any]:
 async def market_scan(
     quote: str = "USDT",
     top_n: int = 10,
-    min_quote_volume: float = 1_000_000,
+    min_quote_volume: float = 5_000_000,
 ) -> dict[str, Any]:
     quote = quote.upper()
-    items = await all_spot_tickers(quote)
+    items = await eligible_markets(quote, min_quote_volume)
     filtered = [
         x for x in items
         if x["quoteVolume24h"] >= min_quote_volume and x["symbol"] not in STABLE_BASES
@@ -236,164 +242,197 @@ async def get_candles(
         "candles": candles,
     }
 
-@mcp.tool(
-    name="run_live_trader",
-    description=(
-        "Run the full OKX Live Trader workflow end to end: scan liquid spot markets, "
-        "pick a momentum candidate, compare it with BTC/ETH/SOL, inspect daily candles, "
-        "and return a conditional breakout plan with trigger, stop logic, targets and "
-        "invalidation. This tool is analysis-only and never executes a trade."
-    ),
-)
-async def run_live_trader(
-    quote: str = "USDT",
-    min_quote_volume: float = 5_000_000,
-    scan_top_n: int = 15,
-    lookback_days: int = 90,
-) -> dict[str, Any]:
-    quote = quote.upper()
-    tickers = await all_spot_tickers(quote)
-    benchmarks = {"BTC", "ETH", "SOL"}
+async def eligible_markets(quote="USDT", min_quote_volume=5_000_000):
+    if quote.upper() != "USDT":
+        raise RuleViolation("规则执行只支持USDT报价")
+    threshold = max(dec(min_quote_volume), dec(POLICY.min_quote_volume))
+    specs = {r["instId"]: r for r in await client.get("/api/v5/public/instruments", {"instType": "SPOT"})}
+    rows = []
+    for item in await all_spot_tickers(quote):
+        spec = specs.get(item["instId"], {})
+        if spec.get("state") != "live" or item["symbol"] in STABLE_BASES:
+            continue
+        if fnum(spec.get("listTime")) <= 0 or datetime.now(timezone.utc).timestamp() - fnum(spec["listTime"]) / 1000 < 7 * 86400:
+            continue
+        if dec(item["quoteVolume24h"]) < threshold or item["bid"] <= 0 or item["ask"] < item["bid"]:
+            continue
+        spread = (item["ask"] - item["bid"]) / ((item["ask"] + item["bid"]) / 2) * 10000
+        if spread > 20:
+            continue
+        age = datetime.now(timezone.utc).timestamp() - fnum(item["ts"]) / 1000
+        if not -5 <= age <= 15:
+            continue
+        item["spreadBps"] = spread
+        rows.append(item)
+    # Liquidity first; a leaderboard is discovery, never a buy signal.
+    return sorted(rows, key=lambda x: (-x["quoteVolume24h"], x["spreadBps"]))
 
-    eligible = [
-        x for x in tickers
-        if x["quoteVolume24h"] >= min_quote_volume
-        and x["symbol"] not in STABLE_BASES
-        and x["symbol"] not in benchmarks
-    ]
-    eligible.sort(key=lambda x: x["change24hPct"], reverse=True)
-    leaders = eligible[: max(3, min(int(scan_top_n), 50))]
-    if not leaders:
-        raise RuntimeError("No eligible OKX spot symbols matched the current filters.")
 
-    # Prefer strong momentum with meaningful turnover, while lightly penalizing
-    # extremely stretched one-day moves.
-    def score(x: dict[str, Any]) -> float:
-        vol_m = max(x["quoteVolume24h"] / 1_000_000, 1e-9)
-        stretch = max(x["change24hPct"] - 30.0, 0.0)
-        return x["change24hPct"] + 2.0 * math.log10(vol_m + 1.0) - 0.35 * stretch
+@mcp.tool()
+async def run_live_trader(quote: str = "USDT", min_quote_volume: float = 5_000_000,
+                          scan_top_n: int = 10, lookback_days: int = 90) -> dict[str, Any]:
+    """Scan liquid markets and check closed breakout/retest signals. Never sends orders."""
+    rows = await eligible_markets(quote, min_quote_volume)
+    candidates = rows[:max(1, min(scan_top_n, 10))]
+    signals = []
+    for row in candidates:
+        try:
+            signal = await service.signal(row["instId"], "long")
+            signals.append({"instId": row["instId"], **signal})
+        except Exception:
+            signals.append({"instId": row["instId"], "eligible": False, "reasons": ["行情不足或暂不可用"]})
+    return {"asOf": datetime.now(timezone.utc).isoformat(), "mode": "ANALYSIS_ONLY",
+            "marketCandidates": candidates, "signals": signals,
+            "decision": "REVIEW" if any(s["eligible"] for s in signals) else "WAIT",
+            "note": "候选通过信号仍需账户风控、止损目标和执行预览。lookback_days保留兼容；新规则固定15m/1H/4H。"}
 
-    candidate = max(leaders, key=score)
 
-    lookup = {x["symbol"]: x for x in tickers}
-    comparison = [candidate]
-    for b in ("BTC", "ETH", "SOL"):
-        if b in lookup:
-            comparison.append(lookup[b])
+@mcp.tool()
+async def get_rules() -> dict[str, Any]:
+    """Read executable policy limits, modes, supported order types and grid boundaries."""
+    return {"version": "2.0.0", "policy": POLICY.view(), "mode": client.mode,
+            "execution": "fresh_confirmation_only", "orders": ["spot buy/sell FOK", "isolated linear swap/futures long/short FOK", "ordinary/algo cancellation"],
+            "newExposure": "Only with no existing derivative positions, ordinary/algo orders or allocated bot funds; no same-asset inventory additions.",
+            "signal": "Closed 15m breakout + later 15m retest; breakout volume >=1.5x prior20; 4H trend; no >4% 1H chase",
+            "grid": "Unleveraged spot planning and alerts only; no native grid bot endpoint or automatic replenishment",
+            "monitorEnabled": os.getenv("MONITOR_ENABLED", "false").lower() == "true",
+            "monitorLastSuccess": service.store.get("monitor_last_success"),
+            "privateAccountConfigured": client.configured,
+            "limitations": ["No backtest/profitability claim", "No autonomous account mutations", "No cross/coin-margined/options/margin borrowing", "Single-tenant deployment; persistent SQLite disk required"]}
 
-    candles = await candles_for(candidate["instId"], "1D", min(max(lookback_days, 30), 300))
-    summary = candle_summary(candles)
-    a14 = summary.get("atr14")
 
-    trigger_candidates = [
-        candidate["high24h"],
-        summary.get("high20") or 0.0,
-    ]
-    trigger = max(trigger_candidates)
+@mcp.tool()
+async def account_overview() -> dict[str, Any]:
+    """Read account equity, cash, positions, ordinary/algo orders and unresolved executions."""
+    return await service.account()
 
-    if a14 and a14 > 0:
-        stop = trigger - 1.5 * a14
-    else:
-        # Fallback: use the current 24h range as a volatility proxy.
-        day_range = max(candidate["high24h"] - candidate["low24h"], trigger * 0.02)
-        stop = trigger - day_range
 
-    risk = max(trigger - stop, 0.0)
-    target1 = trigger + risk if risk > 0 else None
-    target2 = trigger + 2 * risk if risk > 0 else None
+@mcp.tool()
+async def analyze_trade(inst_id: str, direction: str = "long") -> dict[str, Any]:
+    """Evaluate closed-candle directional entry evidence; analysis only, no order."""
+    spec = await client.instrument(inst_id.upper())
+    kind = instrument_kind(spec)
+    if kind == "SPOT" and direction == "short":
+        raise RuleViolation("现货不能开空")
+    return {"instId": spec["instId"], **await service.signal(spec["instId"], direction)}
 
-    benchmark_changes = {
-        x["symbol"]: x["change24hPct"] for x in comparison if x["symbol"] in benchmarks
-    }
-    strongest_benchmark = max(benchmark_changes.values()) if benchmark_changes else None
-    relative_edge = (
-        candidate["change24hPct"] - strongest_benchmark
-        if strongest_benchmark is not None else None
-    )
 
-    invalidation_levels = {
-        "24hLow": candidate["low24h"],
-        "20DayLow": summary.get("low20"),
-        "logic": (
-            "The momentum thesis weakens if price breaks below the 24h low; "
-            "a break below the 20-day low is a broader structural invalidation."
-        ),
-    }
+@mcp.tool()
+async def preview_order(inst_id: str, intent: str, price: str, stop: str | None = None,
+                        target: str | None = None, size: str | None = None, leverage: int = 1) -> dict[str, Any]:
+    """Create a 120-second exact FOK execution preview. intent: enter_long/enter_short/exit_long/exit_short. Prices/size are decimal strings; size is base units for spot, contracts for derivatives. Entry needs stop and target; exit needs size. Does not place an order."""
+    return await service.preview(inst_id, intent, price, stop, target, size, leverage)
 
-    return {
-        "asOf": datetime.now(timezone.utc).isoformat(),
-        "mode": "READ_ONLY_ANALYSIS",
-        "workflow": [
-            "scan_liquid_spot_market",
-            "rank_momentum_candidates",
-            "compare_with_BTC_ETH_SOL",
-            "inspect_90d_daily_candles",
-            "build_conditional_trade_plan",
-        ],
-        "filters": {
-            "quote": quote,
-            "minQuoteVolume24h": min_quote_volume,
-            "stablecoinsExcluded": True,
-            "benchmarksExcludedFromCandidateSelection": sorted(benchmarks),
-        },
-        "marketLeaders": leaders[:10],
-        "candidate": candidate,
-        "comparison": comparison,
-        "relativeStrengthVsStrongestBenchmarkPctPoints": (
-            round(relative_edge, 4) if relative_edge is not None else None
-        ),
-        "candleAnalysis": summary,
-        "tradePlan": {
-            "bias": "conditional_long_momentum",
-            "entryTrigger": trigger,
-            "entryRule": (
-                "Do not treat a touch as confirmation. Prefer a sustained break "
-                "above the trigger with relative strength still intact."
-            ),
-            "initialStopReference": round(stop, 12),
-            "riskPerUnit": round(risk, 12),
-            "target1_1R": round(target1, 12) if target1 is not None else None,
-            "target2_2R": round(target2, 12) if target2 is not None else None,
-            "invalidation": invalidation_levels,
-        },
-        "limitations": [
-            "No market-cap data is used; liquidity filtering is based on OKX 24h quote volume.",
-            "No order is placed, amended or cancelled.",
-            "This is conditional market analysis, not financial advice or a guarantee of outcome.",
-        ],
-    }
+
+@mcp.tool()
+async def execute_preview(preview_id: str, confirmation: str) -> dict[str, Any]:
+    """Mutates the OKX account. Only call AFTER the user explicitly confirms the entire displayed preview. confirmation must equal 用户回复: 确认执行 <preview_id>. Never manufacture confirmation. Revalidates and submits at most once."""
+    require_local_auth()
+    return await service.execute(preview_id, confirmation)
+
+
+@mcp.tool()
+async def reconcile_order(preview_id: str) -> dict[str, Any]:
+    """Read exchange order/protection state by the original client ID; never resubmits."""
+    require_local_auth()
+    return await service.reconcile(preview_id)
+
+
+@mcp.tool()
+async def preview_cancel_order(inst_id: str, order_id: str, algo: bool = False) -> dict[str, Any]:
+    """Preview cancellation of one current ordinary/algo order. Does not cancel. Cancelling protection requires explicit acknowledgement of the warning in the preview."""
+    return await service.preview_cancel(inst_id.upper(), order_id, algo)
+
+
+@mcp.tool()
+async def plan_spot_grid(inst_id: str, lower: str, upper: str, stop: str,
+                         budget: str, grids: int = 10) -> dict[str, Any]:
+    """Plan a cash spot grid using current balance, fee and range data; DOES NOT start a bot or place orders."""
+    inst_id = inst_id.upper()
+    snapshot = await client.snapshot()
+    equity, available = account_values(snapshot)
+    spec = await client.instrument(inst_id)
+    ticker = await client.ticker(inst_id)
+    from rules import quote_price
+    quote_price(ticker, "buy")
+    return grid_plan(spec, equity, available, lower, upper, stop, budget, grids,
+                     ticker["last"], await client.fee(spec), await client.candles(inst_id, "4H"))
+
+
+def require_local_auth():
+    if len(client.token) < 32:
+        raise RuleViolation("启用提醒或操作本地状态前请配置MCP_AUTH_TOKEN，至少32字符")
+
+
+@mcp.tool()
+async def create_price_alert(inst_id: str, condition: str, threshold: str, cooldown_seconds: int = 900) -> dict[str, Any]:
+    """Save an above/below price reminder. Runs only while the configured monitor is online. No trades. Without a configured webhook, reminders stay in get_events."""
+    require_local_auth()
+    if os.getenv("MONITOR_ENABLED", "false").lower() != "true":
+        raise RuleViolation("请先启用MONITOR_ENABLED并运行服务，避免创建不会执行的提醒")
+    spec = await client.instrument(inst_id.upper())
+    instrument_kind(spec)
+    return monitor.add(spec["instId"], condition, threshold, cooldown_seconds)
+
+
+@mcp.tool()
+async def list_price_alerts() -> list[dict[str, Any]]:
+    """Read persistent price reminders and their state."""
+    require_local_auth()
+    return monitor.list()
+
+
+@mcp.tool()
+async def set_price_alert_enabled(alert_id: str, enabled: bool) -> dict[str, Any]:
+    """Enable or disable a saved local reminder; does not change an OKX order."""
+    require_local_auth()
+    return monitor.enable(alert_id, enabled)
+
+
+@mcp.tool()
+async def get_events(limit: int = 50) -> list[dict[str, Any]]:
+    """Read price, execution and protection reminders plus delivery status."""
+    require_local_auth()
+    return service.store.events(limit)
+
+
+@mcp.tool()
+async def pause_new_entries(paused: bool = True) -> dict[str, Any]:
+    """Set the local new-entry switch. Does NOT close positions or cancel orders; confirmed reductions remain possible."""
+    require_local_auth()
+    service.store.set("paused", paused)
+    return {"paused": paused, "note": "仅影响本服务新开仓，现有OKX订单继续运行"}
+
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_check(_request: Request) -> JSONResponse:
-    return JSONResponse({
-        "status": "ok",
-        "service": "OKX Live Trader",
-        "mode": "read-only",
-        "mcpEndpoint": "/mcp",
-    })
+    return JSONResponse({"status": "ok", "service": "OKX Live Trader", "version": "2.0.0"})
 
-# Stateless + JSON response makes deployment simple and horizontally safe.
-# DNS-rebinding protection is disabled here because the deployment hostname is
-# assigned dynamically by platforms such as Render/Railway. This server exposes
-# only public, read-only market-data tools and contains no credentials.
-app = mcp.streamable_http_app(
-    host="0.0.0.0",
-    stateless_http=True,
-    json_response=True,
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=False
-    ),
-)
+
+class BearerAuth:
+    """Single-tenant authentication. Put OAuth in front for clients needing OAuth discovery."""
+    def __init__(self, app, token):
+        self.app, self.token = app, token
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") != "/health" and self.token:
+            headers = dict(scope.get("headers", []))
+            actual = headers.get(b"authorization", b"")
+            expected = ("Bearer " + self.token).encode()
+            if not hmac.compare_digest(actual, expected):
+                await JSONResponse({"error": "unauthorized"}, status_code=401)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+# Hostnames are explicitly configured; do not disable DNS rebinding protection.
+allowed_hosts = [s.strip() for s in os.getenv("MCP_ALLOWED_HOSTS", "localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*").split(",") if s.strip()]
+if os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+    allowed_hosts.append(os.environ["RENDER_EXTERNAL_HOSTNAME"])
+raw_app = mcp.streamable_http_app(host="0.0.0.0", stateless_http=True, json_response=True,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed_hosts))
+app = BearerAuth(raw_app, client.token)
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8000"))
-    mcp.run(
-        "streamable-http",
-        host="0.0.0.0",
-        port=port,
-        stateless_http=True,
-        json_response=True,
-        transport_security=TransportSecuritySettings(
-            enable_dns_rebinding_protection=False
-        ),
-    )
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

@@ -1,7 +1,7 @@
 {
   "name": "okx-live-trader",
-  "version": "1.0.0",
-  "description": "OKX Live Trader — scan live crypto markets, compare relative strength, inspect charts, and produce a conditional short-term trading plan using available OKX market-data tools.",
+  "version": "2.0.0",
+  "description": "OKX行情与账户风控、现货/线性合约交易预览及确认执行、现货网格规划和价格提醒。",
   "author": {
     "name": "Personal Plugin"
   },
@@ -10,6 +10,10 @@
     "crypto",
     "trading",
     "market-data",
-    "technical-analysis"
+    "technical-analysis",
+    "risk-management",
+    "order-preview",
+    "alerts",
+    "grid-planning"
   ]
 }

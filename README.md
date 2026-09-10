@@ -1,72 +1,52 @@
-# OKX Live Trader — Remote MCP for ChatGPT
+# OKX Live Trader 2.0
 
-A read-only MCP app for OKX public market data.
+面向个人账户的 OKX MCP 服务：**行情筛选、交易规则、账户检查、确认后下单、网格规划、后台价格提醒**。
 
-## What it exposes
+默认 `demo` 模拟环境。未配置 OKX 凭据时仍可分析公开行情。代码提供实盘适配，但本次改写没有连接私人账户、运行真实交易或验证策略收益；启用前必须完成模拟账户验收。
 
-- `market_scan` — top gainers/losers with liquidity filter
-- `compare_symbols` — BTC/ETH/SOL or arbitrary symbol comparison
-- `get_candles` — recent OHLCV candles + ATR/trend summary
-- `run_live_trader` — full workflow:
-  scan → filter → candidate → benchmark comparison → daily candles → conditional plan
+## 功能与边界
 
-This server **does not contain any order-placement tools** and does not need an OKX API key.
+| 功能 | 当前实现 |
+|---|---|
+| 现货买入 / 卖出 | USDT 现货，现金交易，FOK 限价全成或全撤；禁止卖空 |
+| 合约开多 / 开空 / 平多 / 平空 | USDT 线性永续及交割，逐仓、单向持仓；开仓1–3倍，平仓 `reduceOnly` |
+| 入场与风控 | 已收盘突破及回踩、放量、4H趋势、仓位计算、成本后盈亏比、现金储备、当日回撤 |
+| 下单与撤单 | 精确预览 → 用户确认 → 重验 → 单次提交 → 按原ID核对；普通和策略撤单 |
+| 交易所止盈止损 | 与入场一起提交附带保护；成交后核对实际策略单；失败则暂停新增风险并提醒 |
+| 网格 | 无杠杆现货网格规划：区间、每格价格/数量、成本与库存最坏损失；**不启动交易所机器人，不自动补单** |
+| 合约网格 | **规则说明与人工审核范围，当前不支持启动或执行** |
+| 自动提醒 | 常驻进程轮询上穿/下穿价格；持久化、去重、冷却、订单/保护状态事件；可配置 HTTPS webhook |
+| 无人值守自动交易 | **未开放**；后台只读，所有账户变更逐次确认 |
 
-## Deploy on Render
+## 交易规则
 
-1. Push these files to your GitHub repository.
-2. In Render, create a new **Web Service** from the repository.
-3. Build command:
-   `pip install -r requirements.txt`
-4. Start command:
-   `uvicorn server:app --host 0.0.0.0 --port $PORT`
-5. Health check path:
-   `/health`
-6. After deploy, open:
-   `https://YOUR-SERVICE.onrender.com/health`
-   and verify it returns `"status":"ok"`.
+[完整中文规则](skills/okx-live-trader/references/trading-rules.md) · [代码审查与限制](docs/REVIEW.md) · [部署及模拟验收](docs/DEPLOYMENT.md)
 
-Your MCP endpoint is:
+默认单笔止损风险 ≤ 净值 **0.5%**，单标的名义本金 ≤ **20%**，交易后保留 **30%** 可用 USDT，成本后盈亏比 ≥ **2:1**，当日观测净值回撤达到 **3%** 暂停新增风险。同标的开仓冷却15分钟。
 
-`https://YOUR-SERVICE.onrender.com/mcp`
+首版采用保守的账户隔离：有未平合约、普通/策略挂单、机器人资金、负债或同币库存时，不新增重叠仓位；仍可预览减仓、撤单和核对状态。`derivative_risk=3%` 是总体政策上限；当前一次仅允许一个新增合约风险，实际限制更严格。
 
-## Add it to ChatGPT
+## 常用工具
 
-In the custom MCP app dialog:
+- 分析：`get_rules`、`market_scan`、`compare_symbols`、`get_candles`、`run_live_trader`、`analyze_trade`
+- 账户与执行：`account_overview`、`preview_order`、`execute_preview`、`reconcile_order`、`preview_cancel_order`
+- 网格：`plan_spot_grid`
+- 提醒：`create_price_alert`、`list_price_alerts`、`set_price_alert_enabled`、`get_events`
+- 控制：`pause_new_entries`（只改变本服务新开仓开关，不关闭现有仓位）
 
-- Name: `OKX Live Trader`
-- Connection: `Server URL`
-- Server URL: `https://YOUR-SERVICE.onrender.com/mcp`
-- Authentication: `No authentication`
-- Accept the custom MCP warning
-- Create
+价格、数量以十进制字符串传入。现货数量单位为基础币；合约数量为张，按 `ctVal × ctMult` 换算，不能把张数当作币数。
 
-Then start a new chat and select / mention the app when available.
+## 本地启动
 
-Suggested prompt:
-
-> @OKX Live Trader 扫描当前 OKX 市场，过滤低流动性标的，找出一个相对 BTC/ETH/SOL 最强的短线机会，检查 90 天日 K，并给出触发、止损、目标和失效条件。只分析，不下单。
-
-## Local test
-
-```powershell
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn server:app --host 127.0.0.1 --port 8000
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
-Health:
-`http://127.0.0.1:8000/health`
+健康检查 `/health`；MCP `/mcp`。环境变量参考 `.env.example`，由进程管理器注入，文件不会自动加载。
 
-MCP:
-`http://127.0.0.1:8000/mcp`
+私有账户必须配置至少32字符的 `MCP_AUTH_TOKEN`，所有 MCP 请求带 `Authorization: Bearer <token>`。支持 Bearer Header 的客户端可直接连接；只支持 OAuth 的客户端需要合适的 OAuth 网关，本仓库**没有 OAuth 授权服务器**。不能继续使用原版 README 的公开“无身份验证”配置连接私有账户。
 
-Note: ChatGPT cannot connect directly to your localhost URL; local testing is only for verifying the server before deploying it.
-
-## Security
-
-This version is intentionally read-only and uses only public OKX market-data endpoints.
-Do not add API keys to this public unauthenticated service.
-
-If you later want demo/live trading, add authentication first and use a dedicated OKX sub-account / demo key with minimal permissions.
+部署配置包含持久化磁盘。模拟与实盘应分开部署，使用不同密钥、令牌和数据库。不要把 API Key 发到聊天或提交到 Git。服务只允许交易/撤单写接口，不提供转账或提现。
