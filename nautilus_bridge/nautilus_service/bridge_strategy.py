@@ -41,17 +41,25 @@ class AIIntentStrategy(Strategy):
             timedelta(milliseconds=250),
             callback=self._on_poll,
         )
-        self._runtime.ready.set()
-        self.log.info("AIIntentStrategy ready; external intent bridge enabled")
+        # NautilusTrader 1.231 starts strategies only after execution startup
+        # reconciliation and portfolio initialization complete successfully.
+        self._runtime.mark_strategy_started_after_reconciliation()
+        self.log.info(
+            "AIIntentStrategy ready; startup reconciliation/portfolio readiness confirmed"
+        )
 
     def on_stop(self) -> None:
-        self._runtime.ready.clear()
+        self._runtime.mark_strategy_stopped()
         try:
             self.clock.cancel_timer(self.POLL_TIMER)
         except Exception:
             pass
 
     def _on_poll(self, _event: TimeEvent) -> None:
+        # Probe Nautilus state only on its event thread. A post-start loss of
+        # connectivity/portfolio readiness latches reconciliation closed until restart.
+        self._runtime.refresh_readiness()
+
         for _ in range(20):
             try:
                 cmd = self._runtime.commands.get_nowait()
@@ -101,6 +109,18 @@ class AIIntentStrategy(Strategy):
             return None
         return attr.as_decimal()
 
+    def _require_preview_ready(self) -> None:
+        self._runtime.refresh_readiness()
+        if not self._runtime.preview_ready.is_set():
+            reason = self._runtime.readiness_reason() or "not_ready"
+            raise RuntimeError(f"Preview readiness gate closed: {reason}")
+
+    def _require_trading_ready(self) -> None:
+        self._runtime.refresh_readiness()
+        if not self._runtime.trading_ready.is_set():
+            reason = self._runtime.readiness_reason() or "not_ready"
+            raise PermissionError(f"Trading readiness gate closed: {reason}")
+
     def _size_intent(self, record: IntentRecord) -> dict[str, str | bool]:
         """Size only linear OKX perpetual swaps in native contract units.
 
@@ -112,6 +132,7 @@ class AIIntentStrategy(Strategy):
         - MAX_NOTIONAL_PER_ORDER_USDT
         - venue max quantity, when present
         """
+        self._require_preview_ready()
         self._validate_policy(record)
         request = record.request
         instrument_id = InstrumentId.from_str(request.instrument_id)
@@ -255,6 +276,8 @@ class AIIntentStrategy(Strategy):
             "effective_quantity_limit": str(effective_limit),
             "capped_by": ",".join(cap_reasons),
             "is_inverse": bool(instrument.is_inverse),
+            "preview_ready": self._runtime.preview_ready.is_set(),
+            "trading_ready": self._runtime.trading_ready.is_set(),
             "submit_enabled": policy.allow_order_submit,
             "warning": (
                 "Linear OKX SWAP contract sizing only. V1 still does not submit a protective "
@@ -271,6 +294,7 @@ class AIIntentStrategy(Strategy):
             raise PermissionError(
                 "ALLOW_UNPROTECTED_ENTRY=false; refusing entry without protective child order"
             )
+        self._require_trading_ready()
 
         sizing = self._size_intent(record)
         request = record.request
@@ -308,6 +332,10 @@ class AIIntentStrategy(Strategy):
         else:
             raise ValueError(f"Unsupported entry type: {request.entry_type}")
 
+        # Recheck immediately before the Nautilus submit call so a connectivity
+        # loss detected during sizing/order construction fails closed.
+        self._require_trading_ready()
+
         self._intent_by_client_order_id[str(order.client_order_id)] = record.intent_id
         self.submit_order(order)
         self._runtime.store.update_execution(
@@ -335,31 +363,53 @@ class AIIntentStrategy(Strategy):
     def on_order_accepted(self, event: OrderAccepted) -> None:
         intent_id = self._intent_for_event(event)
         if intent_id:
-            self._runtime.store.update_execution(intent_id, status=IntentStatus.ACCEPTED, last_event="OrderAccepted")
+            self._runtime.store.update_execution(
+                intent_id,
+                status=IntentStatus.ACCEPTED,
+                last_event="OrderAccepted",
+            )
 
     def on_order_rejected(self, event: OrderRejected) -> None:
         intent_id = self._intent_for_event(event)
         if intent_id:
             self._runtime.store.update_execution(
-                intent_id, status=IntentStatus.REJECTED, last_event="OrderRejected", error=str(event)
+                intent_id,
+                status=IntentStatus.REJECTED,
+                last_event="OrderRejected",
+                error=str(event),
             )
 
     def on_order_denied(self, event: OrderDenied) -> None:
         intent_id = self._intent_for_event(event)
         if intent_id:
             self._runtime.store.update_execution(
-                intent_id, status=IntentStatus.REJECTED, last_event="OrderDenied", error=str(event)
+                intent_id,
+                status=IntentStatus.REJECTED,
+                last_event="OrderDenied",
+                error=str(event),
             )
 
     def on_order_canceled(self, event: OrderCanceled) -> None:
         intent_id = self._intent_for_event(event)
         if intent_id:
-            self._runtime.store.update_execution(intent_id, status=IntentStatus.CANCELED, last_event="OrderCanceled")
+            self._runtime.store.update_execution(
+                intent_id,
+                status=IntentStatus.CANCELED,
+                last_event="OrderCanceled",
+            )
 
     def on_order_filled(self, event: OrderFilled) -> None:
         intent_id = self._intent_for_event(event)
         if intent_id is None:
             return
         order = self.cache.order(event.client_order_id)
-        status = IntentStatus.FILLED if order is not None and order.is_closed() else IntentStatus.PARTIALLY_FILLED
-        self._runtime.store.update_execution(intent_id, status=status, last_event="OrderFilled")
+        status = (
+            IntentStatus.FILLED
+            if order is not None and order.is_closed()
+            else IntentStatus.PARTIALLY_FILLED
+        )
+        self._runtime.store.update_execution(
+            intent_id,
+            status=status,
+            last_event="OrderFilled",
+        )
