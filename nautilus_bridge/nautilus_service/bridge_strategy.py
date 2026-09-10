@@ -107,8 +107,10 @@ class AIIntentStrategy(Strategy):
         For a linear contract, approximate stop risk per contract as:
             abs(entry - stop) * instrument.multiplier
 
-        The resulting contract count is rounded down to the venue size increment
-        and capped by both MAX_ORDER_QTY and any venue max quantity.
+        Contract count is rounded down to the venue size increment and capped by:
+        - MAX_ORDER_QTY
+        - MAX_NOTIONAL_PER_ORDER_USDT
+        - venue max quantity, when present
         """
         self._validate_policy(record)
         request = record.request
@@ -167,9 +169,34 @@ class AIIntentStrategy(Strategy):
 
         raw_quantity = target_risk_money / risk_per_contract
 
-        effective_limit = self._runtime.policy.max_order_qty
+        policy = self._runtime.policy
+        if policy.max_order_qty <= 0:
+            raise RuntimeError(f"MAX_ORDER_QTY must be positive, got {policy.max_order_qty}")
+        if policy.max_notional_per_order_usdt <= 0:
+            raise RuntimeError(
+                "MAX_NOTIONAL_PER_ORDER_USDT must be positive, got "
+                f"{policy.max_notional_per_order_usdt}"
+            )
+
+        # For a linear contract quoted in the equity currency, notional per
+        # contract is entry * multiplier. This makes Preview honor the same
+        # absolute notional ceiling configured on the Nautilus RiskEngine.
+        notional_per_contract = entry * multiplier
+        if notional_per_contract <= 0:
+            raise RuntimeError("Calculated notional per contract is non-positive")
+        notional_quantity_limit = policy.max_notional_per_order_usdt / notional_per_contract
+
+        effective_limit = min(policy.max_order_qty, notional_quantity_limit)
+        cap_reasons: list[str] = []
+        if raw_quantity > policy.max_order_qty:
+            cap_reasons.append("MAX_ORDER_QTY")
+        if raw_quantity > notional_quantity_limit:
+            cap_reasons.append("MAX_NOTIONAL_PER_ORDER_USDT")
+
         venue_max_quantity = self._decimal_attr(instrument, "max_quantity")
         if venue_max_quantity is not None and venue_max_quantity > 0:
+            if raw_quantity > venue_max_quantity:
+                cap_reasons.append("VENUE_MAX_QUANTITY")
             effective_limit = min(effective_limit, venue_max_quantity)
         if effective_limit <= 0:
             raise RuntimeError(f"Effective max order quantity must be positive, got {effective_limit}")
@@ -192,7 +219,7 @@ class AIIntentStrategy(Strategy):
         estimated_risk_money = rounded_quantity * risk_per_contract
         estimated_risk_fraction = estimated_risk_money / equity_decimal
         estimated_risk_pct = estimated_risk_fraction * Decimal("100")
-        estimated_notional = rounded_quantity * entry * multiplier
+        estimated_notional = rounded_quantity * notional_per_contract
         lot_size = self._decimal_attr(instrument, "lot_size")
 
         self._runtime.store.update_execution(
@@ -213,14 +240,22 @@ class AIIntentStrategy(Strategy):
             "estimated_risk_money": str(estimated_risk_money),
             "estimated_risk_pct": str(estimated_risk_pct),
             "estimated_notional": str(estimated_notional),
+            "raw_quantity": str(raw_quantity),
             "stop_distance": str(stop_distance),
+            "risk_per_contract": str(risk_per_contract),
+            "notional_per_contract": str(notional_per_contract),
             "contract_multiplier": str(multiplier),
             "size_increment": str(size_increment),
             "lot_size": str(lot_size) if lot_size is not None else "",
             "min_quantity": str(min_quantity) if min_quantity is not None else "",
             "max_quantity": str(venue_max_quantity) if venue_max_quantity is not None else "",
+            "max_order_qty": str(policy.max_order_qty),
+            "max_notional_per_order_usdt": str(policy.max_notional_per_order_usdt),
+            "notional_quantity_limit": str(notional_quantity_limit),
+            "effective_quantity_limit": str(effective_limit),
+            "capped_by": ",".join(cap_reasons),
             "is_inverse": bool(instrument.is_inverse),
-            "submit_enabled": self._runtime.policy.allow_order_submit,
+            "submit_enabled": policy.allow_order_submit,
             "warning": (
                 "Linear OKX SWAP contract sizing only. V1 still does not submit a protective "
                 "stop/TP child; keep order submission disabled."
