@@ -23,7 +23,6 @@ from nautilus_trader.live.config import LiveRiskEngineConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import InstrumentId
-from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TraderId
 
 from bridge_runtime import BridgeRuntime, RiskPolicy, env_bool
@@ -159,7 +158,9 @@ def main() -> None:
     node.trader.add_strategy(
         AIIntentStrategy(
             config=StrategyConfig(
-                strategy_id=StrategyId("AI-INTENT-001"),
+                # NautilusTrader 1.231 passes config.strategy_id directly to Logger(name=...),
+                # which expects a str. Leave strategy_id unset and use a stable order ID tag.
+                order_id_tag="001",
                 use_hyphens_in_client_order_ids=False,
             ),
             runtime=runtime,
