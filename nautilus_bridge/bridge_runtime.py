@@ -35,6 +35,7 @@ class RiskPolicy:
     equity_currency: str
     max_risk_pct: Decimal
     max_order_qty: Decimal
+    max_notional_per_order_usdt: Decimal
     allow_market_entry: bool
     allow_order_submit: bool
     allow_unprotected_entry: bool
@@ -54,6 +55,9 @@ class RiskPolicy:
             equity_currency=os.getenv("EQUITY_CURRENCY", "USDT").strip().upper(),
             max_risk_pct=Decimal(os.getenv("MAX_RISK_PCT", "0.50")),
             max_order_qty=Decimal(os.getenv("MAX_ORDER_QTY", "10")),
+            max_notional_per_order_usdt=Decimal(
+                os.getenv("MAX_NOTIONAL_PER_ORDER_USDT", "5000")
+            ),
             allow_market_entry=env_bool("ALLOW_MARKET_ENTRY", False),
             allow_order_submit=env_bool("ALLOW_ORDER_SUBMIT", False),
             allow_unprotected_entry=env_bool("ALLOW_UNPROTECTED_ENTRY", False),
