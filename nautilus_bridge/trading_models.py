@@ -99,6 +99,15 @@ class ApprovalRequest(BaseModel):
 class BridgeHealth(BaseModel):
     status: str
     ready: bool
+    strategy_ready: bool
+    portfolio_ready: bool
+    reconciliation_ready: bool
+    execution_connected: bool
+    data_connected: bool
+    preview_ready: bool
+    trading_ready: bool
+    reconciliation_invalidated: bool
+    readiness_reason: str | None = None
     okx_environment: str
     order_submit_enabled: bool
     unprotected_entry_enabled: bool
