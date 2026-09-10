@@ -46,9 +46,29 @@ def make_risk_notional_map(policy: RiskPolicy) -> dict[str, int]:
     return {instrument_id: limit for instrument_id in policy.allowed_instruments}
 
 
+def api_host() -> str:
+    return os.getenv("NAUTILUS_BRIDGE_HOST", "127.0.0.1").strip()
+
+
+def api_port() -> int:
+    # Render exposes its allocated port through PORT. Keep the dedicated variable
+    # for local development and non-Render deployments.
+    return int(os.getenv("PORT") or os.getenv("NAUTILUS_BRIDGE_PORT", "8765"))
+
+
+def validate_api_security(host: str) -> None:
+    token = os.getenv("BRIDGE_API_TOKEN", "").strip()
+    loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+    if host not in loopback_hosts and not token:
+        raise RuntimeError(
+            "BRIDGE_API_TOKEN is required when the Nautilus bridge binds beyond loopback"
+        )
+
+
 def start_api(runtime: BridgeRuntime) -> threading.Thread:
-    host = os.getenv("NAUTILUS_BRIDGE_HOST", "127.0.0.1")
-    port = int(os.getenv("NAUTILUS_BRIDGE_PORT", "8765"))
+    host = api_host()
+    port = api_port()
+    validate_api_security(host)
     app = create_app(runtime)
 
     def run() -> None:
@@ -126,7 +146,8 @@ def main() -> None:
     print(
         f"[bridge] starting Nautilus environment={'DEMO' if is_demo else 'LIVE'} "
         f"submit_enabled={policy.allow_order_submit} "
-        f"unprotected_entry={policy.allow_unprotected_entry}",
+        f"unprotected_entry={policy.allow_unprotected_entry} "
+        f"api={api_host()}:{api_port()}",
         flush=True,
     )
     node.run()

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hmac
 import os
 import queue
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from bridge_runtime import BridgeCommand, BridgeRuntime, CommandKind
 from trading_models import ApprovalRequest, BridgeHealth, CommandResult, IntentStatus, TradeIntentCreate
@@ -13,8 +15,20 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
     app = FastAPI(
         title="xko Nautilus Bridge",
         version="0.1.0",
-        description="Local human-gated bridge from MCP trade intents to NautilusTrader.",
+        description="Private human-gated bridge from MCP trade intents to NautilusTrader.",
     )
+    bridge_api_token = os.getenv("BRIDGE_API_TOKEN", "").strip()
+
+    @app.middleware("http")
+    async def authenticate_bridge(request: Request, call_next):
+        # Render uses /health for the private-service health check, so keep only this
+        # endpoint unauthenticated. All intent/order state requires the internal token.
+        if request.url.path != "/health" and bridge_api_token:
+            authorization = request.headers.get("authorization", "")
+            scheme, _, token = authorization.partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(token, bridge_api_token):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized bridge request"})
+        return await call_next(request)
 
     @app.get("/health", response_model=BridgeHealth)
     def health() -> BridgeHealth:
