@@ -6,13 +6,25 @@ import threading
 import uvicorn
 from dotenv import load_dotenv
 
-from nautilus_trader.adapters.okx import OKXDataClientConfig, OKXDataClientFactory
-from nautilus_trader.adapters.okx import OKXEnvironment, OKXExecutionClientConfig
-from nautilus_trader.adapters.okx import OKXExecutionClientFactory, OKXInstrumentType, OKXMarginMode
-from nautilus_trader.common import Environment
-from nautilus_trader.config import LiveRiskEngineConfig, StrategyConfig
-from nautilus_trader.live import LiveNode
-from nautilus_trader.model import AccountId, StrategyId, TraderId
+from nautilus_trader.adapters.okx import OKX
+from nautilus_trader.adapters.okx import OKXDataClientConfig
+from nautilus_trader.adapters.okx import OKXExecClientConfig
+from nautilus_trader.adapters.okx import OKXLiveDataClientFactory
+from nautilus_trader.adapters.okx import OKXLiveExecClientFactory
+from nautilus_trader.config import InstrumentProviderConfig
+from nautilus_trader.config import LiveExecEngineConfig
+from nautilus_trader.config import LoggingConfig
+from nautilus_trader.config import StrategyConfig
+from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.core.nautilus_pyo3 import OKXEnvironment
+from nautilus_trader.core.nautilus_pyo3 import OKXInstrumentType
+from nautilus_trader.core.nautilus_pyo3 import OKXMarginMode
+from nautilus_trader.live.config import LiveRiskEngineConfig
+from nautilus_trader.live.node import TradingNode
+from nautilus_trader.model.identifiers import AccountId
+from nautilus_trader.model.identifiers import InstrumentId
+from nautilus_trader.model.identifiers import StrategyId
+from nautilus_trader.model.identifiers import TraderId
 
 from bridge_runtime import BridgeRuntime, RiskPolicy, env_bool
 from intent_store import IntentStore
@@ -23,6 +35,7 @@ from nautilus_service.bridge_strategy import AIIntentStrategy
 def parse_instrument_type(raw: str) -> OKXInstrumentType:
     mapping = {
         "SPOT": OKXInstrumentType.SPOT,
+        "MARGIN": OKXInstrumentType.MARGIN,
         "SWAP": OKXInstrumentType.SWAP,
         "FUTURES": OKXInstrumentType.FUTURES,
         "OPTION": OKXInstrumentType.OPTION,
@@ -51,8 +64,6 @@ def api_host() -> str:
 
 
 def api_port() -> int:
-    # Render exposes its allocated port through PORT. Keep the dedicated variable
-    # for local development and non-Render deployments.
     return int(os.getenv("PORT") or os.getenv("NAUTILUS_BRIDGE_PORT", "8765"))
 
 
@@ -97,6 +108,8 @@ def main() -> None:
 
     instrument_type = parse_instrument_type(os.getenv("OKX_INSTRUMENT_TYPE", "SWAP"))
     margin_mode = parse_margin_mode(os.getenv("OKX_MARGIN_MODE", "CROSS"))
+    load_ids = frozenset(InstrumentId.from_str(x) for x in policy.allowed_instruments)
+    provider_config = InstrumentProviderConfig(load_all=False, load_ids=load_ids)
 
     risk_config = LiveRiskEngineConfig(
         bypass=False,
@@ -106,32 +119,41 @@ def main() -> None:
         debug=False,
     )
 
-    node = (
-        LiveNode.builder("XKO-NAUTILUS-001", TraderId.from_str("XKO-001"), Environment.LIVE)
-        .with_reconciliation(reconciliation=True)
-        .with_risk_engine_config(risk_config)
-        .with_timeout_connection(30)
-        .with_timeout_reconciliation(30)
-        .with_timeout_portfolio(30)
-        .add_data_client(
-            None,
-            OKXDataClientFactory(),
-            OKXDataClientConfig(instrument_types=[instrument_type], environment=okx_environment),
-        )
-        .add_exec_client(
-            None,
-            OKXExecutionClientFactory(),
-            OKXExecutionClientConfig(
-                account_id=account_id,
-                instrument_types=[instrument_type],
+    config_node = TradingNodeConfig(
+        trader_id=TraderId("XKO-001"),
+        logging=LoggingConfig(log_level="INFO", use_pyo3=True),
+        exec_engine=LiveExecEngineConfig(
+            reconciliation=True,
+            reconciliation_instrument_ids=list(load_ids),
+            graceful_shutdown_on_exception=True,
+        ),
+        risk_engine=risk_config,
+        data_clients={
+            OKX: OKXDataClientConfig(
                 environment=okx_environment,
-                margin_mode=margin_mode,
+                instrument_provider=provider_config,
+                instrument_types=(instrument_type,),
+                http_timeout_secs=20,
             ),
-        )
-        .build()
+        },
+        exec_clients={
+            OKX: OKXExecClientConfig(
+                environment=okx_environment,
+                instrument_provider=provider_config,
+                instrument_types=(instrument_type,),
+                margin_mode=margin_mode,
+                http_timeout_secs=20,
+            ),
+        },
+        timeout_connection=30.0,
+        timeout_reconciliation=30.0,
+        timeout_portfolio=30.0,
+        timeout_disconnection=10.0,
+        timeout_post_stop=5.0,
     )
 
-    node.add_strategy(
+    node = TradingNode(config=config_node)
+    node.trader.add_strategy(
         AIIntentStrategy(
             config=StrategyConfig(
                 strategy_id=StrategyId.from_str("AI-INTENT-001"),
@@ -141,6 +163,9 @@ def main() -> None:
             account_id=account_id,
         )
     )
+    node.add_data_client_factory(OKX, OKXLiveDataClientFactory)
+    node.add_exec_client_factory(OKX, OKXLiveExecClientFactory)
+    node.build()
 
     start_api(runtime)
     print(
@@ -150,7 +175,11 @@ def main() -> None:
         f"api={api_host()}:{api_port()}",
         flush=True,
     )
-    node.run()
+
+    try:
+        node.run()
+    finally:
+        node.dispose()
 
 
 if __name__ == "__main__":
