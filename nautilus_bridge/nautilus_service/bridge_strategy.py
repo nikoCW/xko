@@ -5,12 +5,19 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
-from nautilus_trader.common import TimeEvent
+from nautilus_trader.common.events import TimeEvent
 from nautilus_trader.config import StrategyConfig
-from nautilus_trader.model import AccountId, ClientOrderId, Currency, InstrumentId
-from nautilus_trader.model import OrderAccepted, OrderCanceled, OrderDenied, OrderFilled, OrderRejected
-from nautilus_trader.model import OrderSide, TimeInForce
-from nautilus_trader.risk import FixedRiskSizer
+from nautilus_trader.model.enums import OrderSide, TimeInForce
+from nautilus_trader.model.events import (
+    OrderAccepted,
+    OrderCanceled,
+    OrderDenied,
+    OrderFilled,
+    OrderRejected,
+)
+from nautilus_trader.model.identifiers import AccountId, ClientOrderId, InstrumentId
+from nautilus_trader.model.objects import Currency
+from nautilus_trader.risk.sizing import FixedRiskSizer
 from nautilus_trader.trading import Strategy
 
 from bridge_runtime import BridgeCommand, BridgeRuntime, CommandKind
