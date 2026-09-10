@@ -1,62 +1,32 @@
 ---
 name: okx-live-trader
-description: Use live OKX market data to scan crypto opportunities, filter extreme or low-quality movers, compare candidates against BTC/ETH/SOL, inspect price charts, and produce a conditional trading plan. Use when the user invokes OKX Live Trader, asks for an OKX market scan, relative-strength scan, crypto momentum setup, or a structured short-term trade plan based on current OKX data.
-version: 1.0.0
+description: 使用 OKX Live Trader MCP 分析实时行情和账户风险，规划现货、USDT线性合约和现货网格，预览买卖及撤单，确认后执行并核对成交和保护单，设置价格提醒。适用于 OKX 交易处理、下单计划和风控提醒。
+metadata:
+  version: "2.0.0"
 ---
 
 # OKX Live Trader
 
-Use this skill as a structured, read-only market-analysis workflow. Prefer live OKX market-data tools when available. Never claim an order was placed, modified, cancelled, or filled unless a real execution tool is explicitly available and actually used.
+先调用 `get_rules` 确认部署版本、运行模式、私有账户与后台监控是否可用。操作受实际工具能力和运行时规则限制；不能把本地规则文件当成行情、账户或执行结果。
 
-## Core workflow
+使用前读取 [交易与执行规则](references/trading-rules.md)。该文件说明现货买卖、合约开平、网格、提醒及失败恢复。数值以 `get_rules` 和工具返回为准。
 
-1. **Resolve the task**
-   - Identify the requested universe, timeframe, and whether the user wants a scan, a single-symbol analysis, or a comparison.
-   - If not specified, default to a short-term momentum scan using current spot-market data.
+## 工作流
 
-2. **Scan the market**
-   - Retrieve top gainers and, when useful, top losers.
-   - Note price change, market cap, and 24h volume when available.
-   - Do not mechanically select the largest percentage mover.
+1. 用户有账户或持仓时先 `account_overview`，优先处理未核实执行、缺失保护和重叠订单。没有私有连接时继续公开行情分析，说明无法验证的账户字段。
+2. 全市场扫描用 `run_live_trader`；指定标的用 `analyze_trade`。`WAIT` 是有效结论，不能因为用户希望交易而强行选币。现货下跌信号不是开空指令。
+3. 开仓需结构止损、目标、手续费和滑点后的风险收益，调用 `preview_order` 使用实时账户自动计算上限；减仓需明确数量。不要手工绕过服务返回的拦截原因。
+4. 展示完整预览：模拟/实盘、标的、开平/买卖、数量及单位、FOK价格、逐仓与杠杆、止盈止损、风险估算、现金余额、有效期、预览ID。减仓或撤销保护时清楚展示其后果。
+5. 每个账户变更必须等待用户针对这一次完整预览的新确认。请求回复工具返回的 `确认执行 <previewId>`，收到对应确认后才能调用 `execute_preview`。不能自己生成确认，也不能把“自动处理”“继续”或历史授权当成某笔订单参数的确认。用户修改参数时重新预览。
+6. 使用 `reconcile_order` 核对执行。区分预览、交易所受理、实际成交、保护生效和结果不明。结果不明禁止重发；报告原ID和下一步核对方法。
 
-3. **Filter candidates**
-   - Prefer candidates with stronger liquidity and more credible market depth proxies.
-   - Flag unusually small market caps, extreme turnover, or outsized one-day moves as higher-risk.
-   - Select one primary candidate and briefly explain why it survived the filter.
+## 网格与提醒
 
-4. **Benchmark relative strength**
-   - Compare the candidate with BTC, ETH, and SOL unless the user requests other benchmarks.
-   - State whether the candidate is showing meaningful relative strength or weakness versus the majors.
+- `plan_spot_grid` 只生成无杠杆现货规划，不启动网格机器人；不能报告“网格已启动”。本版合约网格也不支持执行。
+- 网格边界和止损可以分别建立上穿/下穿提醒。不要用突破策略的逐笔执行工具冒充自动网格补单。
+- 设置提醒前确认 `monitorEnabled`。返回本地事件记录时，不能说用户已收到推送；没有 webhook 时通过 `get_events` 查看。监控只读，不会自动减仓或止损。
+- 如用户要求无人值守实盘交易，说明当前部署只支持自动监控、规则分析和逐次确认执行。提供能完成的方案，不能静默解除确认或风控。
 
-5. **Inspect the chart**
-   - Default to a 90-day daily chart for short-term swing context.
-   - Use another interval or history window if the user specifies it.
-   - Identify only levels supported by returned market data. Do not fabricate indicators or candles that were not provided.
+## 输出
 
-6. **Build a conditional plan**
-   - Provide: current context, trigger condition, invalidation condition, stop logic, and one or more profit-management ideas.
-   - Prefer conditional phrasing such as “if price holds above…” rather than unconditional buy/sell instructions.
-   - If the day is already highly extended, explicitly discuss chase risk and the option to wait for confirmation or a pullback.
-
-7. **State limitations**
-   - Distinguish market-data analysis from execution.
-   - If OKX tools are unavailable in the current environment, say that live OKX data is unavailable and do not substitute invented prices.
-
-## Output format
-
-Keep the response compact and trader-friendly:
-
-- **Market regime:** broad move or dispersion
-- **Selected candidate:** symbol + why
-- **Relative strength:** candidate vs BTC/ETH/SOL
-- **Key live data:** current price, 24h change, high/low, volume when available
-- **Trade setup:** trigger, stop/invalidation, targets or management logic
-- **Risk note:** what would make the setup unattractive
-- **Execution status:** explicitly say “analysis only / no order placed” unless a real execution action occurred
-
-## Guardrails
-
-- Use live tool results as the source of truth for current prices.
-- Do not invent leverage, position size, account balance, liquidation price, funding, open interest, order-book depth, or technical indicators unless those data are actually available.
-- Do not imply certainty or guaranteed profit.
-- If the user requests execution but only read-only OKX tools are available, explain the limitation and provide the proposed order parameters for review instead of pretending to execute.
+优先给出“处理已有风险 / 等待 / 可预览”的结论和原因，再列关键价格、数量、规则与下一步。所有行情注明来源时间；缺失数据明确标记，不编造资金、收益、新闻、强平价或已成交状态。策略未做回测，不能声称预期收益或胜率。

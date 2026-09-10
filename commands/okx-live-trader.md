@@ -1,5 +1,5 @@
 ---
-description: Run the OKX Live Trader workflow using current OKX market data.
+description: 按统一规则处理 OKX 行情、账户、现货/合约交易预览、网格规划和提醒。
 ---
 
-Use the `okx-live-trader` skill for this request. Run the full workflow unless the user explicitly narrows the task: scan, filter, benchmark relative strength, inspect the relevant chart, and return a conditional trade setup. Use current OKX data when available and clearly state that no order was placed unless a real execution tool was used.
+使用 `okx-live-trader` 技能。先读取运行规则和能力，再根据任务执行账户检查、行情分析、网格规划或提醒配置。下单/撤单必须展示完整预览并等待用户对该预览的新确认，之后核对真实成交和保护状态。规则不通过则明确等待原因；网格规划不能报告为已启动机器人。
