@@ -6,7 +6,11 @@ from typing import Any
 
 import httpx
 
-from trading_models import EntryType, Side, TradeIntentCreate
+try:
+    # Imported from the repository root, e.g. server_with_nautilus.py.
+    from .trading_models import EntryType, Side, TradeIntentCreate
+except ImportError:  # pragma: no cover - supports running from nautilus_bridge/ directly
+    from trading_models import EntryType, Side, TradeIntentCreate
 
 
 BASE_URL = os.getenv("XKO_NAUTILUS_URL", "http://127.0.0.1:8765").rstrip("/")
@@ -93,7 +97,8 @@ def register_nautilus_tools(mcp: Any) -> None:
         name="submit_trade_intent",
         description=(
             "WRITE ACTION. Submit an already human-approved intent into Nautilus. "
-            "Requires local safety switches to permit submission."
+            "Call only after explicit user instruction to execute. The Nautilus bridge "
+            "must independently permit submission through its local safety switches."
         ),
     )
     async def submit_trade_intent(intent_id: str) -> dict[str, Any]:
