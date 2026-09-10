@@ -4,8 +4,8 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    startCommand: uvicorn server_with_nautilus:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /bridge-health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
