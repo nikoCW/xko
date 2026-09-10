@@ -16,8 +16,8 @@ from nautilus_trader.model.events import (
     OrderRejected,
 )
 from nautilus_trader.model.identifiers import AccountId, ClientOrderId, InstrumentId
+from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.objects import Currency
-from nautilus_trader.risk.sizing import FixedRiskSizer
 from nautilus_trader.trading import Strategy
 
 from bridge_runtime import BridgeCommand, BridgeRuntime, CommandKind
@@ -94,13 +94,39 @@ class AIIntentStrategy(Strategy):
         if request.entry_type == EntryType.MARKET and not policy.allow_market_entry:
             raise ValueError("MARKET entry disabled by ALLOW_MARKET_ENTRY=false")
 
+    @staticmethod
+    def _decimal_attr(value: Any, name: str) -> Decimal | None:
+        attr = getattr(value, name, None)
+        if attr is None:
+            return None
+        return attr.as_decimal()
+
     def _size_intent(self, record: IntentRecord) -> dict[str, str | bool]:
+        """Size only linear OKX perpetual swaps in native contract units.
+
+        For a linear contract, approximate stop risk per contract as:
+            abs(entry - stop) * instrument.multiplier
+
+        The resulting contract count is rounded down to the venue size increment
+        and capped by both MAX_ORDER_QTY and any venue max quantity.
+        """
         self._validate_policy(record)
         request = record.request
         instrument_id = InstrumentId.from_str(request.instrument_id)
         instrument = self.cache.instrument(instrument_id)
         if instrument is None:
             raise RuntimeError(f"Instrument {instrument_id} is not loaded in Nautilus cache")
+
+        # V2 sizing is deliberately narrow: only OKX linear SWAP contracts are
+        # accepted. Reject unsupported derivative shapes rather than guessing.
+        if not request.instrument_id.endswith("-SWAP.OKX"):
+            raise RuntimeError("Contract-aware sizing currently supports OKX SWAP instruments only")
+        if not isinstance(instrument, CryptoPerpetual):
+            raise RuntimeError(
+                f"Expected CryptoPerpetual for {instrument_id}, got {type(instrument).__name__}"
+            )
+        if bool(instrument.is_inverse):
+            raise RuntimeError("Inverse OKX SWAP sizing is not supported; refusing to guess quantity")
 
         equity_map = self.portfolio.equity(account_id=self._account_id)
         currency = Currency.from_str(self._runtime.policy.equity_currency)
@@ -109,34 +135,96 @@ class AIIntentStrategy(Strategy):
             available = ", ".join(str(x) for x in equity_map.keys()) or "(none)"
             raise RuntimeError(f"No {currency} equity available from portfolio; available={available}")
 
+        if str(instrument.quote_currency) != str(currency):
+            raise RuntimeError(
+                f"Linear SWAP quote currency {instrument.quote_currency} does not match "
+                f"EQUITY_CURRENCY {currency}; FX-aware sizing is not implemented"
+            )
+
+        multiplier = self._decimal_attr(instrument, "multiplier")
+        if multiplier is None or multiplier <= 0:
+            raise RuntimeError(f"Invalid/missing contract multiplier for {instrument_id}: {multiplier}")
+
+        size_increment = instrument.size_increment.as_decimal()
+        if size_increment <= 0:
+            raise RuntimeError(f"Invalid size_increment for {instrument_id}: {size_increment}")
+
+        entry = Decimal(str(request.entry_price))
+        stop = Decimal(str(request.stop_loss))
+        stop_distance = abs(entry - stop)
+        if stop_distance <= 0:
+            raise RuntimeError("entry_price and stop_loss must differ")
+
+        equity_decimal = equity.as_decimal()
+        if equity_decimal <= 0:
+            raise RuntimeError(f"Account equity must be positive, got {equity}")
+
         risk_fraction = request.risk_pct / Decimal("100")
-        quantity = FixedRiskSizer(instrument).calculate(
-            entry=instrument.make_price(str(request.entry_price)),
-            stop_loss=instrument.make_price(str(request.stop_loss)),
-            equity=equity,
-            risk=risk_fraction,
-            hard_limit=self._runtime.policy.max_order_qty,
-            unit_batch_size=instrument.size_increment.as_decimal(),
-            units=1,
-        )
-        if quantity.as_decimal() <= 0:
-            raise RuntimeError("FixedRiskSizer produced zero/non-positive quantity")
+        target_risk_money = equity_decimal * risk_fraction
+        risk_per_contract = stop_distance * multiplier
+        if risk_per_contract <= 0:
+            raise RuntimeError("Calculated risk per contract is non-positive")
+
+        raw_quantity = target_risk_money / risk_per_contract
+
+        effective_limit = self._runtime.policy.max_order_qty
+        venue_max_quantity = self._decimal_attr(instrument, "max_quantity")
+        if venue_max_quantity is not None and venue_max_quantity > 0:
+            effective_limit = min(effective_limit, venue_max_quantity)
+        if effective_limit <= 0:
+            raise RuntimeError(f"Effective max order quantity must be positive, got {effective_limit}")
+
+        capped_quantity = min(raw_quantity, effective_limit)
+        rounded_quantity = (capped_quantity // size_increment) * size_increment
+        if rounded_quantity <= 0:
+            raise RuntimeError(
+                "Contract-aware sizing produced zero quantity after lot-size rounding; "
+                f"raw={raw_quantity} capped={capped_quantity} size_increment={size_increment}"
+            )
+
+        min_quantity = self._decimal_attr(instrument, "min_quantity")
+        if min_quantity is not None and min_quantity > 0 and rounded_quantity < min_quantity:
+            raise RuntimeError(
+                f"Sized quantity {rounded_quantity} is below venue min_quantity {min_quantity}"
+            )
+
+        quantity = instrument.make_qty(rounded_quantity)
+        estimated_risk_money = rounded_quantity * risk_per_contract
+        estimated_risk_fraction = estimated_risk_money / equity_decimal
+        estimated_risk_pct = estimated_risk_fraction * Decimal("100")
+        estimated_notional = rounded_quantity * entry * multiplier
+        lot_size = self._decimal_attr(instrument, "lot_size")
 
         self._runtime.store.update_execution(
             record.intent_id,
             sized_quantity=str(quantity),
             equity_used=str(equity),
             risk_fraction_used=str(risk_fraction),
-            last_event="PREVIEW_SIZED",
+            last_event="PREVIEW_SIZED_LINEAR_SWAP",
         )
         return {
             "intent_id": record.intent_id,
             "instrument_id": request.instrument_id,
+            "sizing_model": "okx_linear_swap_contracts_v2",
             "quantity": str(quantity),
             "equity": str(equity),
             "risk_fraction": str(risk_fraction),
+            "target_risk_money": str(target_risk_money),
+            "estimated_risk_money": str(estimated_risk_money),
+            "estimated_risk_pct": str(estimated_risk_pct),
+            "estimated_notional": str(estimated_notional),
+            "stop_distance": str(stop_distance),
+            "contract_multiplier": str(multiplier),
+            "size_increment": str(size_increment),
+            "lot_size": str(lot_size) if lot_size is not None else "",
+            "min_quantity": str(min_quantity) if min_quantity is not None else "",
+            "max_quantity": str(venue_max_quantity) if venue_max_quantity is not None else "",
+            "is_inverse": bool(instrument.is_inverse),
             "submit_enabled": self._runtime.policy.allow_order_submit,
-            "warning": "V1 only sizes from stop_loss; it does not submit a protective stop/TP child.",
+            "warning": (
+                "Linear OKX SWAP contract sizing only. V1 still does not submit a protective "
+                "stop/TP child; keep order submission disabled."
+            ),
         }
 
     def _submit_intent(self, record: IntentRecord) -> None:
