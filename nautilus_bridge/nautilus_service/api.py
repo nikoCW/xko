@@ -21,8 +21,8 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     @app.middleware("http")
     async def authenticate_bridge(request: Request, call_next):
-        # Render uses /health for the private-service health check, so keep only this
-        # endpoint unauthenticated. All intent/order state requires the internal token.
+        # Keep only the liveness/readiness endpoint unauthenticated. All intent/order
+        # state requires the bridge bearer token.
         if request.url.path != "/health" and bridge_api_token:
             authorization = request.headers.get("authorization", "")
             scheme, _, token = authorization.partition(" ")
@@ -32,9 +32,10 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     @app.get("/health", response_model=BridgeHealth)
     def health() -> BridgeHealth:
+        readiness = runtime.readiness_snapshot()
         return BridgeHealth(
             status="ok",
-            ready=runtime.ready.is_set(),
+            **readiness,
             okx_environment=runtime.okx_environment,
             order_submit_enabled=runtime.policy.allow_order_submit,
             unprotected_entry_enabled=runtime.policy.allow_unprotected_entry,
@@ -86,8 +87,12 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     @app.post("/intents/{intent_id}/preview", response_model=CommandResult)
     def preview_intent(intent_id: str) -> CommandResult:
-        if not runtime.ready.is_set():
-            raise HTTPException(status_code=503, detail="Nautilus strategy is not ready")
+        if not runtime.preview_ready.is_set():
+            reason = runtime.readiness_reason() or "not_ready"
+            raise HTTPException(
+                status_code=503,
+                detail=f"Preview readiness gate closed: {reason}",
+            )
 
         try:
             runtime.store.get(intent_id)
@@ -112,8 +117,15 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     @app.post("/intents/{intent_id}/submit")
     def submit_intent(intent_id: str) -> dict:
-        if not runtime.ready.is_set():
-            raise HTTPException(status_code=503, detail="Nautilus strategy is not ready")
+        # Operational state is a separate hard gate from the policy switches below.
+        # Even if submission is enabled in a future version, a lost connection or
+        # invalidated reconciliation state must fail closed before anything is queued.
+        if not runtime.trading_ready.is_set():
+            reason = runtime.readiness_reason() or "not_ready"
+            raise HTTPException(
+                status_code=503,
+                detail=f"Trading readiness gate closed: {reason}",
+            )
         if not runtime.policy.allow_order_submit:
             raise HTTPException(
                 status_code=403,
