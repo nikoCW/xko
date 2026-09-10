@@ -1,0 +1,20 @@
+# Replace bridge.example.com with a DNS name whose A record points to the EC2 Elastic IP.
+# Caddy will obtain and renew a public TLS certificate automatically.
+bridge.example.com {
+    encode zstd gzip
+
+    @health path /health
+    handle @health {
+        reverse_proxy 127.0.0.1:8765
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8765
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+}
