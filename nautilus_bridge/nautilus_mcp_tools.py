@@ -13,12 +13,25 @@ except ImportError:  # pragma: no cover - supports running from nautilus_bridge/
     from trading_models import EntryType, Side, TradeIntentCreate
 
 
-BASE_URL = os.getenv("XKO_NAUTILUS_URL", "http://127.0.0.1:8765").rstrip("/")
+_RAW_BASE_URL = os.getenv("XKO_NAUTILUS_URL", "http://127.0.0.1:8765").rstrip("/")
+BASE_URL = _RAW_BASE_URL if "://" in _RAW_BASE_URL else f"http://{_RAW_BASE_URL}"
+BRIDGE_API_TOKEN = os.getenv("BRIDGE_API_TOKEN", "").strip()
+
+
+def _headers() -> dict[str, str]:
+    if not BRIDGE_API_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {BRIDGE_API_TOKEN}"}
 
 
 async def _request(method: str, path: str, *, json: dict[str, Any] | None = None) -> Any:
     async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.request(method, f"{BASE_URL}{path}", json=json)
+        response = await client.request(
+            method,
+            f"{BASE_URL}{path}",
+            json=json,
+            headers=_headers(),
+        )
     if response.is_error:
         try:
             detail = response.json().get("detail")
