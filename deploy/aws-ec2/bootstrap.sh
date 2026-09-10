@@ -48,12 +48,15 @@ install -d -o root -g "${APP_USER}" -m 0750 "${ENV_DIR}"
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
   git clone --branch "${BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
+  chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
 else
-  git -C "${APP_DIR}" fetch origin "${BRANCH}"
-  git -C "${APP_DIR}" checkout "${BRANCH}"
-  git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+  # The checkout is intentionally owned by the locked-down xko user. Run git as
+  # that same owner so Git's dubious-ownership protection is never bypassed.
+  chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
+  sudo -u "${APP_USER}" git -C "${APP_DIR}" fetch origin "${BRANCH}"
+  sudo -u "${APP_USER}" git -C "${APP_DIR}" checkout "${BRANCH}"
+  sudo -u "${APP_USER}" git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 fi
-chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
 
 if [[ ! -x "${APP_DIR}/.venv/bin/python" ]]; then
   sudo -u "${APP_USER}" python3 -m venv "${APP_DIR}/.venv"
