@@ -16,10 +16,12 @@ if [[ ! -d "${APP_DIR}/.git" ]]; then
   exit 1
 fi
 
-git -C "${APP_DIR}" fetch origin "${BRANCH}"
-git -C "${APP_DIR}" checkout "${BRANCH}"
-git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+# Keep the checkout owned by the service user and run Git as that same user.
+# This preserves Git's ownership safety checks instead of disabling them.
 chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
+sudo -u "${APP_USER}" git -C "${APP_DIR}" fetch origin "${BRANCH}"
+sudo -u "${APP_USER}" git -C "${APP_DIR}" checkout "${BRANCH}"
+sudo -u "${APP_USER}" git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 
 sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install --no-cache-dir \
   -r "${APP_DIR}/${RUNTIME_REQUIREMENTS}"
