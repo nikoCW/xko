@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: okx-live-trader-mcp
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: OKX_API_BASE
+        value: https://www.okx.com

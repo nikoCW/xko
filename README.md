@@ -1,40 +1,72 @@
-# OKX Live Trader Plugin
+# OKX Live Trader — Remote MCP for ChatGPT
 
-A skill-focused plugin that packages the `okx-live-trader` workflow into an importable plugin structure.
+A read-only MCP app for OKX public market data.
 
-## Contents
+## What it exposes
 
-- `.claude-plugin/plugin.json` — standalone plugin manifest
-- `skills/okx-live-trader/SKILL.md` — primary workflow
-- `commands/okx-live-trader.md` — optional slash-command compatibility entry
+- `market_scan` — top gainers/losers with liquidity filter
+- `compare_symbols` — BTC/ETH/SOL or arbitrary symbol comparison
+- `get_candles` — recent OHLCV candles + ATR/trend summary
+- `run_live_trader` — full workflow:
+  scan → filter → candidate → benchmark comparison → daily candles → conditional plan
 
-## What it does
+This server **does not contain any order-placement tools** and does not need an OKX API key.
 
-When invoked, the workflow asks ChatGPT to use available OKX live market-data capabilities to:
+## Deploy on Render
 
-1. scan gainers/losers;
-2. filter low-quality or extreme movers;
-3. compare a candidate against BTC/ETH/SOL;
-4. inspect a price chart;
-5. produce a conditional short-term trading plan;
-6. clearly distinguish analysis from real order execution.
+1. Push these files to your GitHub repository.
+2. In Render, create a new **Web Service** from the repository.
+3. Build command:
+   `pip install -r requirements.txt`
+4. Start command:
+   `uvicorn server:app --host 0.0.0.0 --port $PORT`
+5. Health check path:
+   `/health`
+6. After deploy, open:
+   `https://YOUR-SERVICE.onrender.com/health`
+   and verify it returns `"status":"ok"`.
 
-## Important dependency note
+Your MCP endpoint is:
 
-This package intentionally does not declare an `.app.json` dependency because no public OKX app ID was discoverable in the current ChatGPT Plugin Directory. It therefore relies on OKX market-data tools already being available in the ChatGPT environment where the plugin runs.
+`https://YOUR-SERVICE.onrender.com/mcp`
 
-If a formal OKX ChatGPT app ID becomes available, add a root-level `.app.json` referencing that app and wire it into a native plugin manifest as documented by OpenAI.
+## Add it to ChatGPT
 
-## Import path
+In the custom MCP app dialog:
 
-For managed ChatGPT workspaces, place this folder in a GitHub repository and import it via:
+- Name: `OKX Live Trader`
+- Connection: `Server URL`
+- Server URL: `https://YOUR-SERVICE.onrender.com/mcp`
+- Authentication: `No authentication`
+- Accept the custom MCP warning
+- Create
 
-Workspace settings → Plugins → Add → Import marketplace
+Then start a new chat and select / mention the app when available.
 
-A standalone repository containing `.claude-plugin/plugin.json` is a supported import format. After import, set the plugin installation policy to Available or Installed as appropriate.
+Suggested prompt:
 
-Once installed on a supported ChatGPT surface, invoke the plugin with an `@` mention, for example:
+> @OKX Live Trader 扫描当前 OKX 市场，过滤低流动性标的，找出一个相对 BTC/ETH/SOL 最强的短线机会，检查 90 天日 K，并给出触发、止损、目标和失效条件。只分析，不下单。
 
-`@okx-live-trader scan the market and give me the strongest liquid momentum setup.`
+## Local test
 
-Slash-command behavior depends on the client/surface; the `commands/` file is included for compatibility but is not required for ChatGPT `@` invocation.
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn server:app --host 127.0.0.1 --port 8000
+```
+
+Health:
+`http://127.0.0.1:8000/health`
+
+MCP:
+`http://127.0.0.1:8000/mcp`
+
+Note: ChatGPT cannot connect directly to your localhost URL; local testing is only for verifying the server before deploying it.
+
+## Security
+
+This version is intentionally read-only and uses only public OKX market-data endpoints.
+Do not add API keys to this public unauthenticated service.
+
+If you later want demo/live trading, add authentication first and use a dedicated OKX sub-account / demo key with minimal permissions.
