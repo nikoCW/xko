@@ -9,6 +9,7 @@ fi
 APP_USER="${APP_USER:-xko}"
 APP_DIR="${APP_DIR:-/opt/xko}"
 BRANCH="${BRANCH:-main}"
+RUNTIME_REQUIREMENTS="deploy/aws-ec2/requirements-runtime.txt"
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
   echo "${APP_DIR} is not a git checkout. Run bootstrap.sh first." >&2
@@ -20,7 +21,10 @@ git -C "${APP_DIR}" checkout "${BRANCH}"
 git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
 
-sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/nautilus_bridge/requirements.txt"
+sudo -u "${APP_USER}" "${APP_DIR}/.venv/bin/pip" install --no-cache-dir \
+  -r "${APP_DIR}/${RUNTIME_REQUIREMENTS}"
+rm -rf "/home/${APP_USER}/.cache/pip" /root/.cache/pip
+
 install -o root -g root -m 0644 \
   "${APP_DIR}/deploy/aws-ec2/xko-nautilus-bridge.service" \
   /etc/systemd/system/xko-nautilus-bridge.service
