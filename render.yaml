@@ -2,7 +2,7 @@ services:
   - type: web
     name: okx-live-trader-mcp
     runtime: python
-    plan: starter
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn server_with_nautilus:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /bridge-health
@@ -29,7 +29,6 @@ services:
     numInstances: 1
     buildCommand: pip install -r nautilus_bridge/requirements.txt
     startCommand: cd nautilus_bridge && python -m nautilus_service.main
-    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
