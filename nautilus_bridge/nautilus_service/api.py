@@ -48,6 +48,8 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             protective_bracket_mode=PROTECTIVE_BRACKET_MODE,
             protection_scope=PROTECTION_SCOPE,
             target_instrument_position_policy=TARGET_POSITION_POLICY,
+            max_order_qty_default=str(runtime.policy.max_order_qty),
+            max_order_qty_by_instrument=runtime.policy.max_order_qty_snapshot(),
             allowed_instruments=sorted(runtime.policy.allowed_instruments),
         )
 
