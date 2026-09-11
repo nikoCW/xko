@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily XKO verified intent backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=xko-intent-backup.service
+
+[Install]
+WantedBy=timers.target
