@@ -11,10 +11,13 @@ from bridge_runtime import BridgeCommand, BridgeRuntime, CommandKind
 from trading_models import ApprovalRequest, BridgeHealth, CommandResult, IntentStatus, TradeIntentCreate
 
 
+PROTECTIVE_BRACKET_MODE = "OKX_ATTACHED_OCO"
+
+
 def create_app(runtime: BridgeRuntime) -> FastAPI:
     app = FastAPI(
         title="xko Nautilus Bridge",
-        version="0.1.0",
+        version="0.2.0",
         description="Private human-gated bridge from MCP trade intents to NautilusTrader.",
     )
     bridge_api_token = os.getenv("BRIDGE_API_TOKEN", "").strip()
@@ -39,6 +42,8 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             okx_environment=runtime.okx_environment,
             order_submit_enabled=runtime.policy.allow_order_submit,
             unprotected_entry_enabled=runtime.policy.allow_unprotected_entry,
+            protected_submit_only=True,
+            protective_bracket_mode=PROTECTIVE_BRACKET_MODE,
             allowed_instruments=sorted(runtime.policy.allowed_instruments),
         )
 
@@ -117,34 +122,54 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     @app.post("/intents/{intent_id}/submit")
     def submit_intent(intent_id: str) -> dict:
-        # Operational state is a separate hard gate from the policy switches below.
-        # Even if submission is enabled in a future version, a lost connection or
-        # invalidated reconciliation state must fail closed before anything is queued.
+        # Policy remains the first hard lock. This deployment should stay false until
+        # attached-OCO behavior has been validated end-to-end in a non-money test path.
+        if not runtime.policy.allow_order_submit:
+            raise HTTPException(
+                status_code=403,
+                detail="Order submission disabled by ALLOW_ORDER_SUBMIT=false",
+            )
+
+        # The bridge no longer has an unprotected execution path. A true value is a
+        # configuration error and must never be treated as permission to bypass protection.
+        if runtime.policy.allow_unprotected_entry:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "ALLOW_UNPROTECTED_ENTRY=true is forbidden. "
+                    "This bridge submits protected OKX attached-OCO brackets only."
+                ),
+            )
+
+        # Operational state is independent from the policy switch. Lost connectivity,
+        # invalid reconciliation, or missing protective stop on any open allowed position
+        # closes this gate before anything can be queued.
         if not runtime.trading_ready.is_set():
             reason = runtime.readiness_reason() or "not_ready"
             raise HTTPException(
                 status_code=503,
                 detail=f"Trading readiness gate closed: {reason}",
             )
-        if not runtime.policy.allow_order_submit:
+
+        try:
+            before = runtime.store.get(intent_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        # OrderFactory.bracket in the protected OKX path always carries both attached
+        # children. SL is mandatory and already required by TradeIntentCreate; TP is
+        # mandatory for this execution mode as well. Refuse before mutating lifecycle state.
+        if before.request.take_profit is None:
             raise HTTPException(
-                status_code=403,
-                detail="Order submission disabled by ALLOW_ORDER_SUBMIT=false",
-            )
-        if not runtime.policy.allow_unprotected_entry:
-            raise HTTPException(
-                status_code=403,
+                status_code=409,
                 detail=(
-                    "V1 entry submission blocked by ALLOW_UNPROTECTED_ENTRY=false. "
-                    "Protective stop/TP execution is intentionally not implemented yet."
+                    "Protected submit requires take_profit. "
+                    "Refusing to queue an intent without both attached SL and TP."
                 ),
             )
 
         try:
-            before = runtime.store.get(intent_id)
             record = runtime.store.mark_queued(intent_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -158,6 +183,8 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
                     intent_id,
                     status=IntentStatus.ERROR,
                     error="Bridge command queue full after mark_queued",
+                    protection_status="NOT_SUBMITTED",
+                    protection_verified=False,
                 )
                 raise HTTPException(status_code=503, detail="Bridge command queue is full") from exc
 
