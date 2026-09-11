@@ -11,13 +11,14 @@ ChatGPT
   -> OKX
 ```
 
-The public MCP gateway provides OKX market analysis tools and registers human-gated Nautilus intent tools. ChatGPT emits structured trade intent; sizing, risk checks, execution state, and reconciliation live in the Nautilus process.
+The public MCP gateway provides OKX market analysis tools and registers human-gated Nautilus intent tools. ChatGPT emits structured trade intent; sizing, risk checks, execution state, protective-order state, and reconciliation live in the Nautilus process.
 
 ## MCP tools
 
 Market-analysis tools include:
 
 - `market_scan`
+- `get_ticker`
 - `compare_symbols`
 - `get_candles`
 - `run_live_trader`
@@ -31,7 +32,7 @@ Nautilus bridge tools include:
 - `approve_trade_intent`
 - `submit_trade_intent`
 
-The current V1 bridge intentionally blocks order submission by default.
+Order submission is intentionally blocked by default.
 
 ## Deployment
 
@@ -70,18 +71,32 @@ sudo bash deploy/aws-ec2/bootstrap.sh
 
 Full instructions, EBS persistence, Elastic IP, HTTPS/Caddy, OKX Trusted IP, systemd, and update workflow are documented in `deploy/aws-ec2/README.md`.
 
+## Protected execution model
+
+For supported linear OKX SWAP intents, the bridge sizes risk in native contract units and builds a Nautilus bracket containing:
+
+- entry order (`LIMIT`, or `MARKET` only when explicitly enabled);
+- mandatory `STOP_MARKET` stop-loss;
+- mandatory `MARKET_IF_TOUCHED` take-profit;
+- `TriggerType.LAST_PRICE` for both protective triggers.
+
+On NautilusTrader 1.231, the OKX adapter translates a representable bracket `SubmitOrderList` into one venue-native parent order carrying attached TP/SL (`attachAlgoOrds`). This avoids the old post-fill flow where separate reduce-only conditional orders could leave an unprotected gap or be rejected by OKX.
+
+The bridge also scans reconciled open allowed positions. If an open position has no live reduce-only stop, `protection_ready` closes immediately; persistent failure becomes restart-required fail-closed state.
+
 ## Safety defaults
 
-Keep these values while validating the Demo path:
+Keep these values while validating the protected path:
 
 ```text
-OKX_DEMO=true
 ALLOW_ORDER_SUBMIT=false
 ALLOW_UNPROTECTED_ENTRY=false
 ALLOW_MARKET_ENTRY=false
 ```
 
-The bridge uses `stop_loss` for position-risk sizing, but protective SL/TP child execution is not implemented yet. Do not enable real-money order submission until protective exits and restart/reconciliation behavior are implemented and tested end to end.
+`ALLOW_UNPROTECTED_ENTRY=true` is now treated as a configuration error; there is no unprotected submission path. A Preview can report `protected_submit_ready=true`, but that is only bracket construction/readiness evidence and does **not** mean live order submission has been validated.
+
+Do not enable real-money order submission until the attached-OCO path has been tested end to end in an environment where sending test orders is acceptable, including parent/child acknowledgement, fill handling, restart reconciliation, OCO sibling cancellation, and missing-protection fail-closed behavior.
 
 ## Local gateway test
 
