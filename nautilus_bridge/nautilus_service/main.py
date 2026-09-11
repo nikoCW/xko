@@ -94,10 +94,12 @@ def main() -> None:
     is_demo = env_bool("OKX_DEMO", True)
     okx_environment = OKXEnvironment.DEMO if is_demo else OKXEnvironment.LIVE
 
-    if okx_environment == OKXEnvironment.LIVE and env_bool("ALLOW_UNPROTECTED_ENTRY", False):
+    # The execution path is protected-only. Never permit a configuration flag to
+    # reactivate the old unprotected entry path, especially against LIVE.
+    if env_bool("ALLOW_UNPROTECTED_ENTRY", False):
         raise RuntimeError(
-            "This starter refuses LIVE + ALLOW_UNPROTECTED_ENTRY=true. "
-            "Implement/test protective exits before removing this guard."
+            "ALLOW_UNPROTECTED_ENTRY=true is forbidden. "
+            "xko only supports protected OKX attached-OCO bracket submission."
         )
 
     # NautilusTrader 1.231 OKXExecutionClient derives the execution account ID as
@@ -186,7 +188,7 @@ def main() -> None:
     print(
         f"[bridge] starting Nautilus environment={'DEMO' if is_demo else 'LIVE'} "
         f"submit_enabled={policy.allow_order_submit} "
-        f"unprotected_entry={policy.allow_unprotected_entry} "
+        "protected_submit_only=True protection_mode=OKX_ATTACHED_OCO "
         f"api={api_host()}:{api_port()}",
         flush=True,
     )
