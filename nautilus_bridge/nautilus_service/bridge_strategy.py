@@ -616,19 +616,32 @@ class AIIntentStrategy(Strategy):
 
         stop_trigger_type = getattr(stop_order, "trigger_type", None)
         tp_trigger_type = getattr(tp_order, "trigger_type", None)
-        expected_trigger_code = self._enum_code(TriggerType.LAST_PRICE)
-        if (
-            stop_trigger_type is not None
-            and self._enum_code(stop_trigger_type) != expected_trigger_code
-        ):
+        if stop_trigger_type is None:
+            raise RuntimeError("Protected bracket dry-run stop trigger is missing")
+        if tp_trigger_type is None:
+            raise RuntimeError("Protected bracket dry-run take-profit trigger is missing")
+
+        last_trigger_code = self._enum_code(TriggerType.LAST_PRICE)
+        default_trigger_code = self._enum_code(TriggerType.DEFAULT)
+        stop_trigger_code = self._enum_code(stop_trigger_type)
+        tp_trigger_code = self._enum_code(tp_trigger_type)
+
+        if stop_trigger_code == last_trigger_code:
+            stop_trigger_resolution = "DIRECT_LAST_PRICE"
+        elif stop_trigger_code == default_trigger_code:
+            # NautilusTrader 1.231 OrderFactory.bracket() materializes STOP_MARKET
+            # children with TriggerType.DEFAULT. The OKX adapter resolves DEFAULT (and
+            # any unsupported trigger fallback) to OKX `last`, so this is semantically
+            # the requested LAST_PRICE trigger at the venue. No other value is accepted.
+            stop_trigger_resolution = "NAUTILUS_DEFAULT_TO_OKX_LAST"
+        else:
             raise RuntimeError(
                 "Protected bracket dry-run stop trigger mismatch: "
-                f"actual={stop_trigger_type} expected={TriggerType.LAST_PRICE}"
+                f"actual={stop_trigger_type} expected={TriggerType.LAST_PRICE} "
+                f"or Nautilus-1.231-compatible {TriggerType.DEFAULT}"
             )
-        if (
-            tp_trigger_type is not None
-            and self._enum_code(tp_trigger_type) != expected_trigger_code
-        ):
+
+        if tp_trigger_code != last_trigger_code:
             raise RuntimeError(
                 "Protected bracket dry-run take-profit trigger mismatch: "
                 f"actual={tp_trigger_type} expected={TriggerType.LAST_PRICE}"
@@ -649,14 +662,16 @@ class AIIntentStrategy(Strategy):
             "stop_loss_quantity": str(stop_order.quantity),
             "stop_loss_reduce_only": bool(stop_order.is_reduce_only),
             "stop_loss_trigger_type": "LAST_PRICE",
-            "stop_loss_trigger_type_raw": str(stop_trigger_type) if stop_trigger_type is not None else "",
+            "stop_loss_trigger_type_raw": str(stop_trigger_type),
+            "stop_loss_trigger_resolution": stop_trigger_resolution,
             "take_profit_client_order_id": str(tp_order.client_order_id),
             "take_profit_order_type": str(tp_order.order_type),
             "take_profit_side": str(tp_order.side),
             "take_profit_quantity": str(tp_order.quantity),
             "take_profit_reduce_only": bool(tp_order.is_reduce_only),
             "take_profit_trigger_type": "LAST_PRICE",
-            "take_profit_trigger_type_raw": str(tp_trigger_type) if tp_trigger_type is not None else "",
+            "take_profit_trigger_type_raw": str(tp_trigger_type),
+            "take_profit_trigger_resolution": "DIRECT_LAST_PRICE",
             "venue_submit_called": False,
         }
 
