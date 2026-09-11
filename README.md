@@ -82,6 +82,8 @@ For supported linear OKX SWAP intents, the bridge sizes risk in native contract 
 
 On NautilusTrader 1.231, the OKX adapter translates a representable bracket `SubmitOrderList` into one venue-native parent order carrying attached TP/SL (`attachAlgoOrds`). This avoids the old post-fill flow where separate reduce-only conditional orders could leave an unprotected gap or be rejected by OKX.
 
+Preview now performs a bracket dry-run when both SL and TP are present. It calls the same `OrderFactory.bracket(...)` builder used by the submit path, resolves the ENTRY/STOP_LOSS/TAKE_PROFIT children by deterministic client order ID, and validates order count, order types, sides, quantities, and reduce-only invariants. The dry-run never calls `submit_order_list` and reports `venue_submit_called=false`. The submit path deliberately skips this duplicate dry-run and builds the bracket once immediately before the guarded submit call.
+
 Protection ownership is scoped to XKO. The global `protection_ready` scan only evaluates reconciled positions whose opening order belongs to a persisted XKO intent. Manual positions, grid bots, and other external strategies do not globally disable the bridge. To avoid unsafe co-management of an OKX net position, submission has a separate per-instrument isolation rule: the target instrument must be flat before XKO can submit a new protected bracket. Preview remains allowed and reports whether the target instrument is already occupied.
 
 If an XKO-owned open position has no live XKO stop-loss child, `protection_ready` closes immediately; persistent failure becomes restart-required fail-closed state.
@@ -108,7 +110,7 @@ ALLOW_UNPROTECTED_ENTRY=false
 ALLOW_MARKET_ENTRY=false
 ```
 
-`ALLOW_UNPROTECTED_ENTRY=true` is now treated as a configuration error; there is no unprotected submission path. A Preview can report `protected_submit_ready=true`, but that is only bracket construction/readiness evidence and does **not** mean live order submission has been validated.
+`ALLOW_UNPROTECTED_ENTRY=true` is now treated as a configuration error; there is no unprotected submission path. A successful Preview can report `bracket_build_validated=true`, but that proves only local Nautilus bracket construction and invariant checks. It does **not** prove that OKX accepted, attached, triggered, or canceled any live protective order.
 
 Do not enable real-money order submission until the attached-OCO path has been tested end to end in an environment where sending test orders is acceptable, including parent/child acknowledgement, fill handling, restart reconciliation, OCO sibling cancellation, and missing-protection fail-closed behavior.
 
