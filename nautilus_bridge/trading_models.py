@@ -124,6 +124,8 @@ class BridgeHealth(BaseModel):
     protective_bracket_mode: str
     protection_scope: str
     target_instrument_position_policy: str
+    max_order_qty_default: str
+    max_order_qty_by_instrument: dict[str, str]
     allowed_instruments: list[str]
 
 
