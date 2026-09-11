@@ -130,6 +130,15 @@ class AIIntentStrategy(Strategy):
             return None
         return attr.as_decimal()
 
+    @staticmethod
+    def _enum_code(value: Any) -> int | str:
+        """Normalize Cython/Python enum representations without weakening equality checks."""
+        raw = getattr(value, "value", value)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return str(raw)
+
     def _require_preview_ready(self) -> None:
         self._runtime.refresh_readiness()
         if not self._runtime.preview_ready.is_set():
@@ -607,13 +616,22 @@ class AIIntentStrategy(Strategy):
 
         stop_trigger_type = getattr(stop_order, "trigger_type", None)
         tp_trigger_type = getattr(tp_order, "trigger_type", None)
-        if stop_trigger_type is not None and stop_trigger_type != TriggerType.LAST_PRICE:
+        expected_trigger_code = self._enum_code(TriggerType.LAST_PRICE)
+        if (
+            stop_trigger_type is not None
+            and self._enum_code(stop_trigger_type) != expected_trigger_code
+        ):
             raise RuntimeError(
-                f"Protected bracket dry-run stop trigger mismatch: {stop_trigger_type}"
+                "Protected bracket dry-run stop trigger mismatch: "
+                f"actual={stop_trigger_type} expected={TriggerType.LAST_PRICE}"
             )
-        if tp_trigger_type is not None and tp_trigger_type != TriggerType.LAST_PRICE:
+        if (
+            tp_trigger_type is not None
+            and self._enum_code(tp_trigger_type) != expected_trigger_code
+        ):
             raise RuntimeError(
-                f"Protected bracket dry-run take-profit trigger mismatch: {tp_trigger_type}"
+                "Protected bracket dry-run take-profit trigger mismatch: "
+                f"actual={tp_trigger_type} expected={TriggerType.LAST_PRICE}"
             )
 
         return {
@@ -630,11 +648,15 @@ class AIIntentStrategy(Strategy):
             "stop_loss_side": str(stop_order.side),
             "stop_loss_quantity": str(stop_order.quantity),
             "stop_loss_reduce_only": bool(stop_order.is_reduce_only),
+            "stop_loss_trigger_type": "LAST_PRICE",
+            "stop_loss_trigger_type_raw": str(stop_trigger_type) if stop_trigger_type is not None else "",
             "take_profit_client_order_id": str(tp_order.client_order_id),
             "take_profit_order_type": str(tp_order.order_type),
             "take_profit_side": str(tp_order.side),
             "take_profit_quantity": str(tp_order.quantity),
             "take_profit_reduce_only": bool(tp_order.is_reduce_only),
+            "take_profit_trigger_type": "LAST_PRICE",
+            "take_profit_trigger_type_raw": str(tp_trigger_type) if tp_trigger_type is not None else "",
             "venue_submit_called": False,
         }
 
