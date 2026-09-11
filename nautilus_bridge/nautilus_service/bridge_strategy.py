@@ -351,8 +351,12 @@ class AIIntentStrategy(Strategy):
 
         raw_quantity = target_risk_money / risk_per_contract
         policy = self._runtime.policy
-        if policy.max_order_qty <= 0:
-            raise RuntimeError(f"MAX_ORDER_QTY must be positive, got {policy.max_order_qty}")
+        order_qty_limit = policy.max_order_qty_for(request.instrument_id)
+        order_qty_limit_source = policy.max_order_qty_source_for(request.instrument_id)
+        if order_qty_limit <= 0:
+            raise RuntimeError(
+                f"{order_qty_limit_source} must be positive for {request.instrument_id}, got {order_qty_limit}"
+            )
         if policy.max_notional_per_order_usdt <= 0:
             raise RuntimeError(
                 "MAX_NOTIONAL_PER_ORDER_USDT must be positive, got "
@@ -364,10 +368,10 @@ class AIIntentStrategy(Strategy):
             raise RuntimeError("Calculated notional per contract is non-positive")
         notional_quantity_limit = policy.max_notional_per_order_usdt / notional_per_contract
 
-        effective_limit = min(policy.max_order_qty, notional_quantity_limit)
+        effective_limit = min(order_qty_limit, notional_quantity_limit)
         cap_reasons: list[str] = []
-        if raw_quantity > policy.max_order_qty:
-            cap_reasons.append("MAX_ORDER_QTY")
+        if raw_quantity > order_qty_limit:
+            cap_reasons.append(order_qty_limit_source)
         if raw_quantity > notional_quantity_limit:
             cap_reasons.append("MAX_NOTIONAL_PER_ORDER_USDT")
 
@@ -432,7 +436,9 @@ class AIIntentStrategy(Strategy):
             "lot_size": str(lot_size) if lot_size is not None else "",
             "min_quantity": str(min_quantity) if min_quantity is not None else "",
             "max_quantity": str(venue_max_quantity) if venue_max_quantity is not None else "",
-            "max_order_qty": str(policy.max_order_qty),
+            "max_order_qty": str(order_qty_limit),
+            "max_order_qty_source": order_qty_limit_source,
+            "max_order_qty_default": str(policy.max_order_qty),
             "max_notional_per_order_usdt": str(policy.max_notional_per_order_usdt),
             "notional_quantity_limit": str(notional_quantity_limit),
             "effective_quantity_limit": str(effective_limit),
