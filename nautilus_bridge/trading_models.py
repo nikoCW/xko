@@ -122,6 +122,8 @@ class BridgeHealth(BaseModel):
     unprotected_entry_enabled: bool
     protected_submit_only: bool
     protective_bracket_mode: str
+    protection_scope: str
+    target_instrument_position_policy: str
     allowed_instruments: list[str]
 
 
