@@ -10,6 +10,7 @@ WorkingDirectory=/opt/xko
 EnvironmentFile=/etc/xko/nautilus-bridge.env
 Environment=XKO_BACKUP_DIR=/var/backups/xko-nautilus
 Environment=XKO_BACKUP_KEEP=14
+Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/opt/xko/.venv/bin/python /opt/xko/deploy/aws-ec2/backup_intents.py
 NoNewPrivileges=true
 PrivateTmp=true
