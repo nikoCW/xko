@@ -5,7 +5,7 @@ import queue
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
 from intent_store import IntentStore
@@ -16,6 +16,40 @@ def env_bool(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_instrument_decimal_map(raw: str, *, env_name: str) -> dict[str, Decimal]:
+    """Parse comma-separated INSTRUMENT:DECIMAL pairs with fail-closed validation."""
+    result: dict[str, Decimal] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        instrument_id, separator, value_text = item.partition(":")
+        if not separator:
+            raise ValueError(
+                f"{env_name} entry must use INSTRUMENT:VALUE format, got {item!r}"
+            )
+        instrument_id = instrument_id.strip().upper()
+        value_text = value_text.strip()
+        if not instrument_id.endswith(".OKX"):
+            raise ValueError(
+                f"{env_name} instrument must use Nautilus .OKX form, got {instrument_id!r}"
+            )
+        if instrument_id in result:
+            raise ValueError(f"Duplicate {env_name} instrument: {instrument_id}")
+        try:
+            value = Decimal(value_text)
+        except InvalidOperation as exc:
+            raise ValueError(
+                f"{env_name} value for {instrument_id} is not a decimal: {value_text!r}"
+            ) from exc
+        if not value.is_finite() or value <= 0:
+            raise ValueError(
+                f"{env_name} value for {instrument_id} must be finite and positive, got {value}"
+            )
+        result[instrument_id] = value
+    return result
 
 
 class CommandKind(StrEnum):
@@ -36,6 +70,7 @@ class RiskPolicy:
     equity_currency: str
     max_risk_pct: Decimal
     max_order_qty: Decimal
+    max_order_qty_by_instrument: dict[str, Decimal]
     max_notional_per_order_usdt: Decimal
     allow_market_entry: bool
     allow_order_submit: bool
@@ -51,11 +86,19 @@ class RiskPolicy:
             ).split(",")
             if x.strip()
         )
+        max_order_qty = Decimal(os.getenv("MAX_ORDER_QTY", "10"))
+        if not max_order_qty.is_finite() or max_order_qty <= 0:
+            raise ValueError(f"MAX_ORDER_QTY must be finite and positive, got {max_order_qty}")
+        max_order_qty_by_instrument = parse_instrument_decimal_map(
+            os.getenv("MAX_ORDER_QTY_BY_INSTRUMENT", ""),
+            env_name="MAX_ORDER_QTY_BY_INSTRUMENT",
+        )
         return cls(
             allowed_instruments=allowed,
             equity_currency=os.getenv("EQUITY_CURRENCY", "USDT").strip().upper(),
             max_risk_pct=Decimal(os.getenv("MAX_RISK_PCT", "0.50")),
-            max_order_qty=Decimal(os.getenv("MAX_ORDER_QTY", "10")),
+            max_order_qty=max_order_qty,
+            max_order_qty_by_instrument=max_order_qty_by_instrument,
             max_notional_per_order_usdt=Decimal(
                 os.getenv("MAX_NOTIONAL_PER_ORDER_USDT", "5000")
             ),
@@ -63,6 +106,25 @@ class RiskPolicy:
             allow_order_submit=env_bool("ALLOW_ORDER_SUBMIT", False),
             allow_unprotected_entry=env_bool("ALLOW_UNPROTECTED_ENTRY", False),
         )
+
+    def max_order_qty_for(self, instrument_id: str) -> Decimal:
+        """Return the instrument override or the legacy global fallback."""
+        return self.max_order_qty_by_instrument.get(
+            instrument_id.strip().upper(),
+            self.max_order_qty,
+        )
+
+    def max_order_qty_source_for(self, instrument_id: str) -> str:
+        normalized = instrument_id.strip().upper()
+        if normalized in self.max_order_qty_by_instrument:
+            return "MAX_ORDER_QTY_BY_INSTRUMENT"
+        return "MAX_ORDER_QTY"
+
+    def max_order_qty_snapshot(self) -> dict[str, str]:
+        return {
+            instrument_id: str(value)
+            for instrument_id, value in sorted(self.max_order_qty_by_instrument.items())
+        }
 
 
 ReadinessProbe = Callable[[], tuple[bool, bool, bool]]
@@ -80,10 +142,10 @@ class BridgeRuntime:
     readiness is later lost, reconciliation is invalidated and cannot automatically
     re-arm; a full process restart is required to run startup reconciliation again.
 
-    Protection readiness is maintained by the strategy's event-thread scan. Any open
-    allowed position without a live reduce-only stop closes the trading gate immediately.
-    Persistent absence is latched fail-closed until restart. Explicit protective-order
-    rejection/denial can latch the gate immediately.
+    Protection readiness is maintained by the strategy's event-thread scan. Any XKO-owned
+    open position without its expected live reduce-only stop closes the trading gate
+    immediately. Persistent absence is latched fail-closed until restart. Explicit
+    protective-order rejection/denial can latch the gate immediately.
     """
 
     PROTECTION_FAILURE_LATCH_POLLS = 8
@@ -236,9 +298,7 @@ class BridgeRuntime:
                 self._protection_reason = reason or "protection_not_ready"
                 if self._protection_failure_count >= self.PROTECTION_FAILURE_LATCH_POLLS:
                     self._protection_invalidated = True
-                    self._protection_reason = (
-                        f"{self._protection_reason};restart_required"
-                    )
+                    self._protection_reason = f"{self._protection_reason};restart_required"
             self._recompute_gates_locked()
 
     def invalidate_protection(self, reason: str) -> None:
