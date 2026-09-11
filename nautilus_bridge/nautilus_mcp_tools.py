@@ -164,8 +164,10 @@ def register_nautilus_tools(mcp: Any) -> None:
     @mcp.tool(
         name="preview_trade_intent",
         description=(
-            "Validate and size an intent in Nautilus without placing an order. The result also "
-            "reports whether the protected attached-OCO submit path is structurally eligible."
+            "Validate and size an intent in Nautilus without placing an order. When SL+TP are "
+            "present, Preview constructs the real Nautilus OrderFactory bracket and validates "
+            "ENTRY/STOP_LOSS/TAKE_PROFIT types, side, quantity and reduce-only invariants. "
+            "It never calls submit_order_list or sends an order to OKX."
         ),
     )
     async def preview_trade_intent(intent_id: str) -> dict[str, Any]:
