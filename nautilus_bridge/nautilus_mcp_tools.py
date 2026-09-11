@@ -98,10 +98,11 @@ def register_nautilus_tools(mcp: Any) -> None:
         name="create_trade_intent",
         description=(
             "Create a proposed OKX trade intent. This does not place an order. Nautilus "
-            "calculates quantity from risk_pct, entry and stop. For *.SWAP.OKX, "
-            "price_reference_instrument_id is required and must exactly match the OKX SWAP "
-            "instId returned by get_ticker (for example BTC-USDT-SWAP). SPOT fallback is "
-            "forbidden; this tool independently verifies that exact SWAP ticker with OKX."
+            "calculates quantity from risk_pct, entry and stop. For *.SWAP.OKX the gateway "
+            "always derives and independently verifies the exact matching OKX SWAP ticker; "
+            "SPOT fallback is forbidden. If a refreshed client exposes "
+            "price_reference_instrument_id it may be supplied and must match exactly, but "
+            "older cached MCP schemas may omit it safely."
         ),
     )
     async def create_trade_intent(
@@ -118,22 +119,24 @@ def register_nautilus_tools(mcp: Any) -> None:
         canonical_market_inst = _canonical_okx_market_inst(instrument_id)
         is_swap = canonical_market_inst.endswith("-SWAP")
         market_reference: dict[str, Any] | None = None
+        reference_mode: str | None = None
 
         if is_swap:
             supplied_reference = (price_reference_instrument_id or "").strip().upper()
             if supplied_reference.endswith(".OKX"):
                 supplied_reference = supplied_reference[:-4]
-            if not supplied_reference:
-                raise ValueError(
-                    "SWAP intent requires price_reference_instrument_id from get_ticker on the "
-                    f"exact matching SWAP instrument {canonical_market_inst}; SPOT fallback is forbidden"
-                )
-            if supplied_reference != canonical_market_inst:
+            if supplied_reference and supplied_reference != canonical_market_inst:
                 raise ValueError(
                     "SWAP price reference mismatch: "
                     f"intent={canonical_market_inst} reference={supplied_reference}. "
                     "Use the exact matching SWAP instId; SPOT fallback is forbidden."
                 )
+
+            # Backward compatibility for ChatGPT sessions whose cached MCP schema predates
+            # price_reference_instrument_id/get_ticker. The authoritative reference is still
+            # fetched server-side from the exact SWAP instId derived from instrument_id, so
+            # omitting the newer client parameter cannot cause a SPOT fallback.
+            reference_mode = "explicit" if supplied_reference else "derived_from_intent"
             market_reference = await _exact_market_reference(canonical_market_inst)
 
         request = TradeIntentCreate(
@@ -152,6 +155,8 @@ def register_nautilus_tools(mcp: Any) -> None:
             reference_last = Decimal(market_reference["last"])
             difference_pct = ((entry / reference_last) - Decimal("1")) * Decimal("100")
             result["price_reference"] = market_reference
+            result["price_reference_instrument_id"] = canonical_market_inst
+            result["price_reference_mode"] = reference_mode
             result["entry_vs_reference_pct"] = str(difference_pct)
             result["spot_fallback_used"] = False
         return result
