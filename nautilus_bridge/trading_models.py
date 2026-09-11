@@ -84,6 +84,12 @@ class IntentRecord(BaseModel):
     equity_used: str | None = None
     risk_fraction_used: str | None = None
     nautilus_order_id: str | None = None
+    stop_loss_order_id: str | None = None
+    take_profit_order_id: str | None = None
+    protection_mode: str | None = None
+    protection_status: str | None = None
+    protection_verified: bool = False
+    protection_error: str | None = None
     last_event: str | None = None
     error: str | None = None
 
@@ -104,13 +110,18 @@ class BridgeHealth(BaseModel):
     reconciliation_ready: bool
     execution_connected: bool
     data_connected: bool
+    protection_ready: bool
     preview_ready: bool
     trading_ready: bool
     reconciliation_invalidated: bool
+    protection_invalidated: bool
     readiness_reason: str | None = None
+    protection_reason: str | None = None
     okx_environment: str
     order_submit_enabled: bool
     unprotected_entry_enabled: bool
+    protected_submit_only: bool
+    protective_bracket_mode: str
     allowed_instruments: list[str]
 
 
