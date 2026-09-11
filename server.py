@@ -15,30 +15,34 @@ from nautilus_bridge.nautilus_mcp_tools import register_nautilus_tools
 
 OKX_API_BASE = os.getenv("OKX_API_BASE", "https://www.okx.com").rstrip("/")
 DEFAULT_QUOTE = os.getenv("OKX_QUOTE", "USDT").upper()
+SUPPORTED_MARKET_TYPES = {"SPOT", "SWAP"}
 STABLE_BASES = {"USDT", "USDC", "DAI", "FDUSD", "TUSD", "USDS", "USDG", "PYUSD", "EURT"}
 
 mcp = MCPServer(
     name="okx-live-trader",
     title="OKX Live Trader",
-    version="1.1.0",
+    version="1.2.0",
     description=(
         "OKX market-analysis MCP app with an optional, separately hosted, human-gated "
         "NautilusTrader execution bridge. Public market tools are read-only."
     ),
     instructions=(
-        "Use market_scan, compare_symbols, get_candles and run_live_trader for public "
-        "OKX analysis. For trading, call nautilus_health first, then create_trade_intent "
-        "and preview_trade_intent. Never choose raw order quantity yourself; Nautilus "
-        "sizes from risk_pct, entry and stop. approve_trade_intent requires a one-time "
-        "code explicitly supplied by the user. Call submit_trade_intent only after an "
-        "explicit user instruction to execute. Never claim an order was placed until "
-        "the Nautilus execution status confirms it."
+        "Use market_scan, get_ticker, compare_symbols, get_candles and run_live_trader for public "
+        "OKX analysis. For any *.SWAP.OKX trade intent, obtain the entry/reference market data "
+        "from the exact matching OKX SWAP instrument (for example BTC-USDT-SWAP), never from "
+        "BTC-USDT SPOT and never use SPOT as a fallback. Call get_ticker on that SWAP before "
+        "create_trade_intent and pass its exact instId as price_reference_instrument_id. For "
+        "trading, call nautilus_health first, then create_trade_intent and preview_trade_intent. "
+        "Never choose raw order quantity yourself; Nautilus sizes from risk_pct, entry and stop. "
+        "approve_trade_intent requires a one-time code explicitly supplied by the user. Call "
+        "submit_trade_intent only after an explicit user instruction to execute. Never claim an "
+        "order was placed until the Nautilus execution status confirms it."
     ),
 )
 
 
 async def okx_get(path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    headers = {"User-Agent": "okx-live-trader-mcp/1.1", "Accept": "application/json"}
+    headers = {"User-Agent": "okx-live-trader-mcp/1.2", "Accept": "application/json"}
     async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
         response = await client.get(f"{OKX_API_BASE}{path}", params=params or {})
         response.raise_for_status()
@@ -55,20 +59,59 @@ def fnum(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def symbol_to_inst(symbol: str, quote: str = DEFAULT_QUOTE) -> str:
-    symbol = symbol.strip().upper()
-    return symbol if "-" in symbol else f"{symbol}-{quote.upper()}"
+def normalize_inst_type(value: str) -> str:
+    inst_type = value.strip().upper()
+    if inst_type not in SUPPORTED_MARKET_TYPES:
+        raise ValueError(f"Unsupported inst_type={value!r}; use SPOT or SWAP")
+    return inst_type
 
 
-def ticker_view(row: dict[str, Any]) -> dict[str, Any]:
+def normalize_market_instrument(
+    symbol: str,
+    quote: str = DEFAULT_QUOTE,
+    inst_type: str = "SPOT",
+) -> tuple[str, str]:
+    """Return canonical OKX instId plus effective market type.
+
+    Explicit -SWAP symbols always resolve as SWAP. Bare/base or BASE-QUOTE symbols
+    use inst_type. Nautilus IDs ending in .OKX are accepted as convenience input.
+    """
+    raw = symbol.strip().upper()
+    if not raw:
+        raise ValueError("symbol must not be empty")
+    if raw.endswith(".OKX"):
+        raw = raw[:-4]
+
+    requested_type = normalize_inst_type(inst_type)
+    quote = quote.strip().upper()
+
+    if raw.endswith("-SWAP"):
+        return raw, "SWAP"
+
+    if "-" not in raw:
+        raw = f"{raw}-{quote}"
+
+    if requested_type == "SWAP":
+        if raw.count("-") != 1:
+            raise ValueError(
+                f"Cannot derive OKX SWAP instrument from {symbol!r}; use BASE-QUOTE-SWAP"
+            )
+        raw = f"{raw}-SWAP"
+
+    return raw, requested_type
+
+
+def ticker_view(row: dict[str, Any], inst_type: str | None = None) -> dict[str, Any]:
     last = fnum(row.get("last"))
     open24h = fnum(row.get("open24h"))
     change_pct = ((last / open24h) - 1.0) * 100.0 if open24h > 0 else None
     inst = str(row.get("instId", ""))
+    effective_type = inst_type or ("SWAP" if inst.endswith("-SWAP") else "SPOT")
     base = inst.split("-")[0] if "-" in inst else inst
     return {
         "symbol": base,
         "instId": inst,
+        "instType": effective_type,
         "last": last,
         "change24hPct": round(change_pct, 4) if change_pct is not None else None,
         "high24h": fnum(row.get("high24h")),
@@ -81,17 +124,39 @@ def ticker_view(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def all_spot_tickers(quote: str = DEFAULT_QUOTE) -> list[dict[str, Any]]:
-    rows = await okx_get("/api/v5/market/tickers", {"instType": "SPOT"})
-    suffix = f"-{quote.upper()}"
+async def ticker_for(inst_id: str, inst_type: str) -> dict[str, Any]:
+    rows = await okx_get("/api/v5/market/ticker", {"instId": inst_id})
+    if not rows:
+        raise RuntimeError(f"OKX returned no ticker for {inst_id}")
+    row = rows[0]
+    if str(row.get("instId", "")).upper() != inst_id.upper():
+        raise RuntimeError(
+            f"OKX ticker instrument mismatch: requested={inst_id} returned={row.get('instId')}"
+        )
+    item = ticker_view(row, inst_type)
+    if item["last"] <= 0:
+        raise RuntimeError(f"OKX ticker for {inst_id} has non-positive last price")
+    return item
+
+
+async def all_tickers(inst_type: str, quote: str = DEFAULT_QUOTE) -> list[dict[str, Any]]:
+    inst_type = normalize_inst_type(inst_type)
+    rows = await okx_get("/api/v5/market/tickers", {"instType": inst_type})
+    quote = quote.upper()
+    suffix = f"-{quote}" if inst_type == "SPOT" else f"-{quote}-SWAP"
     parsed: list[dict[str, Any]] = []
     for row in rows:
-        if not str(row.get("instId", "")).endswith(suffix):
+        inst_id = str(row.get("instId", ""))
+        if not inst_id.endswith(suffix):
             continue
-        item = ticker_view(row)
+        item = ticker_view(row, inst_type)
         if item["last"] > 0 and item["change24hPct"] is not None:
             parsed.append(item)
     return parsed
+
+
+async def all_spot_tickers(quote: str = DEFAULT_QUOTE) -> list[dict[str, Any]]:
+    return await all_tickers("SPOT", quote)
 
 
 async def candles_for(inst_id: str, bar: str = "1D", limit: int = 90) -> list[dict[str, Any]]:
@@ -173,41 +238,104 @@ async def market_scan(
     return {
         "asOf": datetime.now(timezone.utc).isoformat(),
         "quote": quote,
+        "instType": "SPOT",
         "minQuoteVolume": min_quote_volume,
         "eligibleCount": len(filtered),
         "topGainers": list(reversed(filtered[-n:])),
         "topLosers": filtered[:n],
-        "note": "Read-only OKX public market data; no orders are sent.",
+        "note": "Read-only OKX public SPOT market data; no orders are sent.",
+    }
+
+
+@mcp.tool(
+    name="get_ticker",
+    description=(
+        "Get the exact OKX ticker for SPOT or SWAP. For a Nautilus *.SWAP.OKX trade intent, "
+        "call this with the matching BASE-QUOTE-SWAP instrument and use the returned instId "
+        "as price_reference_instrument_id. Never substitute SPOT for SWAP."
+    ),
+)
+async def get_ticker(
+    symbol: str,
+    quote: str = "USDT",
+    inst_type: str = "SPOT",
+) -> dict[str, Any]:
+    inst_id, effective_type = normalize_market_instrument(symbol, quote, inst_type)
+    item = await ticker_for(inst_id, effective_type)
+    return {
+        "asOf": datetime.now(timezone.utc).isoformat(),
+        "requested": symbol,
+        "instId": inst_id,
+        "instType": effective_type,
+        "ticker": item,
+        "source": "OKX /api/v5/market/ticker",
     }
 
 
 @mcp.tool(
     name="compare_symbols",
-    description="Compare OKX symbols by current price, 24h change, range and quote volume.",
+    description=(
+        "Compare OKX symbols by current price, 24h change, range and volume. Supports SPOT "
+        "and SWAP. Symbols ending in -SWAP (or .SWAP.OKX form) are always queried as SWAP."
+    ),
 )
-async def compare_symbols(symbols: list[str], quote: str = "USDT") -> dict[str, Any]:
+async def compare_symbols(
+    symbols: list[str],
+    quote: str = "USDT",
+    inst_type: str = "SPOT",
+) -> dict[str, Any]:
     quote = quote.upper()
-    lookup = {x["instId"]: x for x in await all_spot_tickers(quote)}
-    rows, missing = [], []
-    for symbol in symbols[:20]:
-        inst = symbol_to_inst(symbol, quote)
-        (rows if inst in lookup else missing).append(lookup[inst] if inst in lookup else inst)
-    return {"asOf": datetime.now(timezone.utc).isoformat(), "items": rows, "missing": missing}
+    requested: list[tuple[str, str]] = [
+        normalize_market_instrument(symbol, quote, inst_type) for symbol in symbols[:20]
+    ]
+    needed_types = {market_type for _, market_type in requested}
+    lookups: dict[str, dict[str, dict[str, Any]]] = {}
+    for market_type in needed_types:
+        lookups[market_type] = {
+            item["instId"]: item for item in await all_tickers(market_type, quote)
+        }
+
+    rows: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for inst_id, market_type in requested:
+        item = lookups[market_type].get(inst_id)
+        if item is None:
+            missing.append(inst_id)
+        else:
+            rows.append(item)
+    return {
+        "asOf": datetime.now(timezone.utc).isoformat(),
+        "items": rows,
+        "missing": missing,
+        "marketTypesQueried": sorted(needed_types),
+        "spotFallbackUsed": False,
+    }
 
 
 @mcp.tool(
     name="get_candles",
-    description="Retrieve recent OKX candles plus compact trend and ATR summary.",
+    description=(
+        "Retrieve recent OKX SPOT or SWAP candles plus compact trend and ATR summary. "
+        "An explicit -SWAP symbol is never rewritten to SPOT."
+    ),
 )
 async def get_candles(
     symbol: str,
     quote: str = "USDT",
     bar: str = "1D",
     limit: int = 90,
+    inst_type: str = "SPOT",
 ) -> dict[str, Any]:
-    inst = symbol_to_inst(symbol, quote)
-    candles = await candles_for(inst, bar, limit)
-    return {"instId": inst, "bar": bar, "summary": candle_summary(candles), "candles": candles}
+    inst_id, effective_type = normalize_market_instrument(symbol, quote, inst_type)
+    candles = await candles_for(inst_id, bar, limit)
+    return {
+        "instId": inst_id,
+        "instType": effective_type,
+        "bar": bar,
+        "summary": candle_summary(candles),
+        "candles": candles,
+        "spotFallbackUsed": False,
+    }
 
 
 @mcp.tool(
@@ -331,6 +459,7 @@ async def health_check(_request: Request) -> JSONResponse:
             "service": "OKX Live Trader + Nautilus Gateway",
             "mode": "read-only-market-data + gated-nautilus-tools",
             "mcpEndpoint": "/mcp",
+            "marketDataVersion": "spot+swap-v1",
             "nautilusBridgeConfigured": bool(os.getenv("XKO_NAUTILUS_URL")),
         }
     )
