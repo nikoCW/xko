@@ -1,0 +1,19 @@
+[Unit]
+Description=XKO verified SQLite intent backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=xko
+Group=xko
+WorkingDirectory=/opt/xko
+EnvironmentFile=/etc/xko/nautilus-bridge.env
+Environment=XKO_BACKUP_DIR=/var/backups/xko-nautilus
+Environment=XKO_BACKUP_KEEP=14
+ExecStart=/opt/xko/.venv/bin/python /opt/xko/deploy/aws-ec2/backup_intents.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/xko-nautilus
+ReadOnlyPaths=/var/lib/xko-nautilus /etc/xko
