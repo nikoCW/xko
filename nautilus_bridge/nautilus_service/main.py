@@ -28,7 +28,7 @@ from nautilus_trader.model.identifiers import TraderId
 from bridge_runtime import BridgeRuntime, RiskPolicy, env_bool
 from intent_store import IntentStore
 from nautilus_service.api import create_app
-from nautilus_service.bridge_strategy import AIIntentStrategy
+from nautilus_service.protection_coverage_strategy import AIIntentStrategy
 
 
 def parse_instrument_type(raw: str) -> OKXInstrumentType:
