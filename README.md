@@ -82,7 +82,9 @@ For supported linear OKX SWAP intents, the bridge sizes risk in native contract 
 
 On NautilusTrader 1.231, the OKX adapter translates a representable bracket `SubmitOrderList` into one venue-native parent order carrying attached TP/SL (`attachAlgoOrds`). This avoids the old post-fill flow where separate reduce-only conditional orders could leave an unprotected gap or be rejected by OKX.
 
-The bridge also scans reconciled open allowed positions. If an open position has no live reduce-only stop, `protection_ready` closes immediately; persistent failure becomes restart-required fail-closed state.
+Protection ownership is scoped to XKO. The global `protection_ready` scan only evaluates reconciled positions whose opening order belongs to a persisted XKO intent. Manual positions, grid bots, and other external strategies do not globally disable the bridge. To avoid unsafe co-management of an OKX net position, submission has a separate per-instrument isolation rule: the target instrument must be flat before XKO can submit a new protected bracket. Preview remains allowed and reports whether the target instrument is already occupied.
+
+If an XKO-owned open position has no live XKO stop-loss child, `protection_ready` closes immediately; persistent failure becomes restart-required fail-closed state.
 
 ## Safety defaults
 
