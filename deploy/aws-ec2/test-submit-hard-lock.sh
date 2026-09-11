@@ -7,7 +7,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 INTENT_ID="$1"
-ENV_FILE="/etc/xko-nautilus-bridge.env"
+ENV_FILE="/etc/xko/nautilus-bridge.env"
 BASE_URL="http://127.0.0.1:8765"
 PYTHON="/opt/xko/.venv/bin/python"
 
