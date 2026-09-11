@@ -1,9 +1,10 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
-from trading_models import EntryType, Side, TradeIntentCreate
+from trading_models import EntryType, IntentRecord, IntentStatus, Side, TradeIntentCreate
 
 
 def test_buy_geometry_valid() -> None:
@@ -51,3 +52,32 @@ def test_okx_suffix_required() -> None:
             entry_price=Decimal("100000"),
             stop_loss=Decimal("99000"),
         )
+
+
+def test_old_intent_json_gets_safe_protection_defaults() -> None:
+    now = datetime.now(timezone.utc)
+    old_record = {
+        "intent_id": "old-intent",
+        "client_order_id": "XKO123456789012345678901234",
+        "status": IntentStatus.CREATED.value,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "request": {
+            "instrument_id": "BTC-USDT-SWAP.OKX",
+            "side": "BUY",
+            "entry_type": "LIMIT",
+            "risk_pct": "0.5",
+            "entry_price": "100000",
+            "stop_loss": "99000",
+            "take_profit": "102000",
+            "reason": "legacy row",
+        },
+    }
+
+    restored = IntentRecord.model_validate(old_record)
+    assert restored.stop_loss_order_id is None
+    assert restored.take_profit_order_id is None
+    assert restored.protection_mode is None
+    assert restored.protection_status is None
+    assert restored.protection_verified is False
+    assert restored.protection_error is None
