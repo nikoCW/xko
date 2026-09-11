@@ -32,6 +32,12 @@ class AIIntentStrategy(Strategy):
     Nautilus bracket order list. NautilusTrader 1.231 translates the representable
     bracket into one OKX parent order with venue-native attached TP/SL (`attachAlgoOrds`).
     No separate post-fill reduce-only algo submission is used.
+
+    Protection ownership is explicit: the global protection gate only evaluates positions
+    whose opening order belongs to a persisted XKO intent. Manual/grid positions remain
+    external and do not globally disable XKO. To avoid unsafe net-position co-management,
+    a new XKO entry is still refused when its target instrument already has any open
+    position, regardless of owner.
     """
 
     POLL_TIMER = "xko.ai_intent.poll"
@@ -56,7 +62,7 @@ class AIIntentStrategy(Strategy):
         self._runtime.mark_strategy_started_after_reconciliation()
         self._refresh_protection_gate()
         self.log.info(
-            "AIIntentStrategy ready; startup reconciliation complete and protection scan initialized"
+            "AIIntentStrategy ready; startup reconciliation complete and XKO-owned protection scan initialized"
         )
 
     def on_stop(self) -> None:
@@ -179,20 +185,86 @@ class AIIntentStrategy(Strategy):
                 return record.intent_id, matched_role
         return None, None
 
-    def _has_open_position(self, instrument_id: InstrumentId) -> bool:
-        return bool(
+    def _intent_id_for_position(self, position: Any) -> str | None:
+        """Return the persisted XKO intent which opened a reconciled position, if any."""
+        opening_order_id = getattr(position, "opening_order_id", None)
+        if opening_order_id is None:
+            return None
+        key = str(opening_order_id)
+
+        intent_id = self._intent_by_client_order_id.get(key)
+        role = self._role_by_client_order_id.get(key)
+        if intent_id is not None and role == "ENTRY":
+            return intent_id
+
+        for record in self._runtime.store.list_recent(limit=200):
+            if record.client_order_id == key:
+                self._register_order_binding(record.intent_id, key, "ENTRY")
+                return record.intent_id
+        return None
+
+    def _open_positions(self, instrument_id: InstrumentId) -> list[Any]:
+        return list(
             self.cache.positions_open(
                 instrument_id=instrument_id,
                 account_id=self._account_id,
             )
         )
 
-    def _refresh_protection_gate(self) -> None:
-        """Require every open allowed position to have a live reduce-only stop.
+    def _has_open_position(self, instrument_id: InstrumentId) -> bool:
+        return bool(self._open_positions(instrument_id))
 
-        This intentionally includes manual/external positions in the allowed instruments:
-        if the account is already exposed without a protective stop, XKO must not open
-        another position. Persistent failure is latched by BridgeRuntime until restart.
+    def _has_xko_open_position(self, intent_id: str, instrument_id: InstrumentId) -> bool:
+        return any(
+            self._intent_id_for_position(position) == intent_id
+            for position in self._open_positions(instrument_id)
+        )
+
+    def _position_ownership_summary(self, positions: list[Any]) -> list[str]:
+        owners: list[str] = []
+        for position in positions:
+            intent_id = self._intent_id_for_position(position)
+            owners.append(f"xko:{intent_id}" if intent_id else "external")
+        return owners
+
+    def _require_target_instrument_flat(self, instrument_id: InstrumentId) -> None:
+        """Disallow XKO from sharing an OKX net position with grid/manual/other XKO exposure."""
+        positions = self._open_positions(instrument_id)
+        if not positions:
+            return
+        owners = ",".join(self._position_ownership_summary(positions))
+        raise PermissionError(
+            f"Existing position blocks new XKO entry on {instrument_id}; ownership={owners}. "
+            "XKO requires the target instrument to be flat before a new protected bracket."
+        )
+
+    def _has_live_xko_stop(self, intent_id: str, instrument_id: InstrumentId) -> bool:
+        try:
+            record = self._runtime.store.get(intent_id)
+        except KeyError:
+            return False
+        expected_stop_id = record.stop_loss_order_id
+        if not expected_stop_id:
+            return False
+
+        open_orders = self.cache.orders_open(
+            instrument_id=instrument_id,
+            account_id=self._account_id,
+        )
+        return any(
+            str(getattr(order, "client_order_id", "")) == expected_stop_id
+            and order.order_type in (OrderType.STOP_MARKET, OrderType.STOP_LIMIT)
+            and bool(order.is_reduce_only)
+            for order in open_orders
+        )
+
+    def _refresh_protection_gate(self) -> None:
+        """Require protection only for positions opened by persisted XKO entry orders.
+
+        Manual, grid, bot, and other external positions are deliberately ignored by the
+        global protection gate. They remain isolated by the per-submit flat-target rule,
+        which prevents XKO from joining an already-open net position on the same instrument.
+        Persistent missing protection on an XKO-owned position is still latched fail-closed.
         """
         try:
             positions = self.cache.positions_open(account_id=self._account_id)
@@ -202,22 +274,16 @@ class AIIntentStrategy(Strategy):
                 instrument_id = position.instrument_id
                 if str(instrument_id) not in allowed:
                     continue
-                open_orders = self.cache.orders_open(
-                    instrument_id=instrument_id,
-                    account_id=self._account_id,
-                )
-                has_protective_stop = any(
-                    order.order_type in (OrderType.STOP_MARKET, OrderType.STOP_LIMIT)
-                    and bool(order.is_reduce_only)
-                    for order in open_orders
-                )
-                if not has_protective_stop:
-                    missing.append(str(instrument_id))
+                intent_id = self._intent_id_for_position(position)
+                if intent_id is None:
+                    continue
+                if not self._has_live_xko_stop(intent_id, instrument_id):
+                    missing.append(f"{instrument_id}:{intent_id}")
 
             if missing:
                 self._runtime.update_protection_readiness(
                     False,
-                    "open_position_without_reduce_only_stop:" + ",".join(sorted(set(missing))),
+                    "xko_position_without_reduce_only_stop:" + ",".join(sorted(set(missing))),
                 )
             else:
                 self._runtime.update_protection_readiness(True)
@@ -334,6 +400,9 @@ class AIIntentStrategy(Strategy):
         estimated_notional = rounded_quantity * notional_per_contract
         lot_size = self._decimal_attr(instrument, "lot_size")
         protected_submit_ready = request.take_profit is not None
+        existing_positions = self._open_positions(instrument_id)
+        target_instrument_flat = not existing_positions
+        existing_position_ownership = self._position_ownership_summary(existing_positions)
 
         self._runtime.store.update_execution(
             record.intent_id,
@@ -372,6 +441,10 @@ class AIIntentStrategy(Strategy):
             "preview_ready": self._runtime.preview_ready.is_set(),
             "trading_ready": self._runtime.trading_ready.is_set(),
             "protection_ready": self._runtime.protection_ready.is_set(),
+            "protection_scope": "xko_owned_positions_only",
+            "target_instrument_flat": target_instrument_flat,
+            "existing_position_count": len(existing_positions),
+            "existing_position_ownership": existing_position_ownership,
             "protected_submit_ready": protected_submit_ready,
             "protection_mode": self.PROTECTION_MODE if protected_submit_ready else "",
             "protective_stop_type": "STOP_MARKET",
@@ -379,10 +452,17 @@ class AIIntentStrategy(Strategy):
             "trigger_type": "LAST_PRICE",
             "submit_enabled": policy.allow_order_submit,
             "warning": (
-                "Protected execution uses a Nautilus bracket translated by OKX adapter 1.231 "
-                "to venue-native attached TP/SL. Submission remains policy-gated."
-                if protected_submit_ready
-                else "take_profit is missing; protected submit requires both SL and TP and will refuse execution."
+                (
+                    "Target instrument already has an open position; preview is allowed but XKO submit "
+                    "will be refused to avoid sharing an OKX net position with grid/manual exposure."
+                )
+                if existing_positions
+                else (
+                    "Protected execution uses a Nautilus bracket translated by OKX adapter 1.231 "
+                    "to venue-native attached TP/SL. Submission remains policy-gated."
+                    if protected_submit_ready
+                    else "take_profit is missing; protected submit requires both SL and TP and will refuse execution."
+                )
             ),
         }
 
@@ -450,9 +530,10 @@ class AIIntentStrategy(Strategy):
             raise ValueError("Protected submit requires take_profit; refusing execution")
         self._require_trading_ready()
 
-        sizing = self._size_intent(record)
         request = record.request
         instrument_id = InstrumentId.from_str(request.instrument_id)
+        self._require_target_instrument_flat(instrument_id)
+        sizing = self._size_intent(record)
         instrument = self.cache.instrument(instrument_id)
         if instrument is None:
             raise RuntimeError(f"Instrument disappeared from cache: {instrument_id}")
@@ -481,10 +562,11 @@ class AIIntentStrategy(Strategy):
             last_event="PROTECTED_BRACKET_BUILT",
         )
 
-        # Recheck immediately before the single Nautilus submit call. In OKX adapter
-        # 1.231 this representable bracket is translated to one parent order with
-        # venue-native attachAlgoOrds, eliminating the post-fill unprotected gap.
+        # Recheck both global safety and target-instrument isolation immediately before
+        # the single Nautilus submit call. This closes the race if an external grid/manual
+        # strategy opens the instrument between sizing and submission.
         self._require_trading_ready()
+        self._require_target_instrument_flat(instrument_id)
         self.submit_order_list(bracket)
         self._runtime.store.update_execution(
             record.intent_id,
@@ -498,7 +580,7 @@ class AIIntentStrategy(Strategy):
         try:
             record = self._runtime.store.get(intent_id)
             instrument_id = InstrumentId.from_str(record.request.instrument_id)
-            if self._has_open_position(instrument_id):
+            if self._has_xko_open_position(intent_id, instrument_id):
                 self._runtime.invalidate_protection(reason)
         except Exception as exc:
             self._runtime.invalidate_protection(f"protection_state_check_failed:{exc}")
