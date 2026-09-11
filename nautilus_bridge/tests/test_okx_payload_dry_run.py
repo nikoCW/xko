@@ -4,17 +4,11 @@ import asyncio
 from types import SimpleNamespace
 
 from nautilus_trader.adapters.okx.execution import OKXExecutionClient
-from nautilus_trader.common import Clock, OrderFactory
-from nautilus_trader.model import ClientOrderId
-from nautilus_trader.model import InstrumentId
-from nautilus_trader.model import OrderSide
-from nautilus_trader.model import OrderType
-from nautilus_trader.model import Price
-from nautilus_trader.model import Quantity
-from nautilus_trader.model import StrategyId
-from nautilus_trader.model import TimeInForce
-from nautilus_trader.model import TraderId
-from nautilus_trader.model import TriggerType
+from nautilus_trader.common.component import TestClock
+from nautilus_trader.common.factories import OrderFactory
+from nautilus_trader.model.enums import OrderSide, OrderType, TimeInForce, TriggerType
+from nautilus_trader.model.identifiers import ClientOrderId, InstrumentId, StrategyId, TraderId
+from nautilus_trader.model.objects import Price, Quantity
 
 
 class _Clock:
@@ -75,8 +69,6 @@ class _NoNetworkOKXProbe:
         self.denied_events.append(kwargs)
 
     async def _place_order_http(self, *, order, params, attach_algo_ords=None) -> None:
-        # This is the first real network boundary in the v1.231 attached-bracket path.
-        # Capture it instead of calling OKXHttpClient.place_order.
         self.place_calls.append(
             {
                 "order": order,
@@ -88,9 +80,9 @@ class _NoNetworkOKXProbe:
 
 def _bracket():
     factory = OrderFactory(
-        TraderId("TRADER-001"),
-        StrategyId("S-001"),
-        Clock.new_test(),
+        trader_id=TraderId("TRADER-001"),
+        strategy_id=StrategyId("S-001"),
+        clock=TestClock(),
     )
     return factory.bracket(
         instrument_id=InstrumentId.from_str("HYPE-USDT-SWAP.OKX"),
