@@ -89,7 +89,7 @@ async def _exact_market_reference(inst_id: str) -> dict[str, Any]:
 def register_nautilus_tools(mcp: Any) -> None:
     @mcp.tool(
         name="nautilus_health",
-        description="Read Nautilus bridge health and safety switches before trading.",
+        description="Read Nautilus bridge health, reconciliation, protection readiness and safety switches.",
     )
     async def nautilus_health() -> dict[str, Any]:
         return await _request("GET", "/health")
@@ -163,14 +163,17 @@ def register_nautilus_tools(mcp: Any) -> None:
 
     @mcp.tool(
         name="preview_trade_intent",
-        description="Validate and size an intent in Nautilus without placing an order.",
+        description=(
+            "Validate and size an intent in Nautilus without placing an order. The result also "
+            "reports whether the protected attached-OCO submit path is structurally eligible."
+        ),
     )
     async def preview_trade_intent(intent_id: str) -> dict[str, Any]:
         return await _request("POST", f"/intents/{intent_id}/preview")
 
     @mcp.tool(
         name="get_trade_intent",
-        description="Read a trade intent and its Nautilus execution status.",
+        description="Read a trade intent, execution status, and persisted protective-order state.",
     )
     async def get_trade_intent(intent_id: str) -> dict[str, Any]:
         return await _request("GET", f"/intents/{intent_id}")
@@ -192,9 +195,10 @@ def register_nautilus_tools(mcp: Any) -> None:
     @mcp.tool(
         name="submit_trade_intent",
         description=(
-            "WRITE ACTION. Submit an already human-approved intent into Nautilus. "
-            "Call only after explicit user instruction to execute. The Nautilus bridge "
-            "must independently permit submission through its local safety switches."
+            "WRITE ACTION. Submit an already human-approved intent into Nautilus's protected "
+            "OKX attached-OCO bracket path. Call only after explicit user instruction to execute. "
+            "The bridge must independently have trading/protection readiness and local order "
+            "submission enabled; it never permits an unprotected fallback."
         ),
     )
     async def submit_trade_intent(intent_id: str) -> dict[str, Any]:
