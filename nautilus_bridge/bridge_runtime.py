@@ -69,7 +69,7 @@ ReadinessProbe = Callable[[], tuple[bool, bool, bool]]
 
 
 class BridgeRuntime:
-    """Cross-thread bridge state with fail-closed operational readiness gates.
+    """Cross-thread bridge state with fail-closed operational/protection gates.
 
     The readiness probe returns:
         (portfolio_ready, execution_connected, data_connected)
@@ -79,7 +79,14 @@ class BridgeRuntime:
     portfolio initialization have completed successfully. If connectivity/portfolio
     readiness is later lost, reconciliation is invalidated and cannot automatically
     re-arm; a full process restart is required to run startup reconciliation again.
+
+    Protection readiness is maintained by the strategy's event-thread scan. Any open
+    allowed position without a live reduce-only stop closes the trading gate immediately.
+    Persistent absence is latched fail-closed until restart. Explicit protective-order
+    rejection/denial can latch the gate immediately.
     """
+
+    PROTECTION_FAILURE_LATCH_POLLS = 8
 
     def __init__(self, store: IntentStore, policy: RiskPolicy, okx_environment: str) -> None:
         self.store = store
@@ -92,17 +99,21 @@ class BridgeRuntime:
         self.reconciliation_ready = threading.Event()
         self.execution_connected = threading.Event()
         self.data_connected = threading.Event()
+        self.protection_ready = threading.Event()
         self.preview_ready = threading.Event()
         self.trading_ready = threading.Event()
 
-        # Backward-compatible alias. `ready` now means operationally trading-ready,
+        # Backward-compatible alias. `ready` means all trading-readiness gates are open,
         # not merely "strategy callback has started". It does not enable submission.
         self.ready = self.trading_ready
 
         self._readiness_probe: ReadinessProbe | None = None
         self._readiness_lock = threading.RLock()
         self._reconciliation_invalidated = False
+        self._protection_invalidated = False
+        self._protection_failure_count = 0
         self._last_readiness_error: str | None = None
+        self._protection_reason: str | None = "protection_scan_not_completed"
 
     @staticmethod
     def _assign(event: threading.Event, value: bool) -> None:
@@ -110,6 +121,25 @@ class BridgeRuntime:
             event.set()
         else:
             event.clear()
+
+    def _operational_ok_locked(self) -> bool:
+        return (
+            self.strategy_ready.is_set()
+            and self.portfolio_ready.is_set()
+            and self.execution_connected.is_set()
+            and self.data_connected.is_set()
+        )
+
+    def _recompute_gates_locked(self) -> None:
+        operational_ok = self._operational_ok_locked()
+        self._assign(self.preview_ready, operational_ok)
+        self._assign(
+            self.trading_ready,
+            operational_ok
+            and self.reconciliation_ready.is_set()
+            and self.protection_ready.is_set()
+            and not self._protection_invalidated,
+        )
 
     def install_readiness_probe(self, probe: ReadinessProbe) -> None:
         if not callable(probe):
@@ -124,27 +154,26 @@ class BridgeRuntime:
             self.strategy_ready.set()
             if not self._reconciliation_invalidated:
                 self.reconciliation_ready.set()
+            self._recompute_gates_locked()
         self.refresh_readiness()
 
     def mark_strategy_stopped(self) -> None:
-        """Fail closed on strategy shutdown; restart is required to re-confirm reconciliation."""
+        """Fail closed on strategy shutdown; restart is required to re-confirm state."""
         with self._readiness_lock:
             self.strategy_ready.clear()
             self.portfolio_ready.clear()
             self.execution_connected.clear()
             self.data_connected.clear()
+            self.protection_ready.clear()
             self.preview_ready.clear()
             self.trading_ready.clear()
             self.reconciliation_ready.clear()
             self._reconciliation_invalidated = True
+            self._protection_invalidated = True
+            self._protection_reason = "strategy_stopped_restart_required"
 
     def refresh_readiness(self) -> None:
-        """Refresh operational gates from Nautilus read-only state.
-
-        This is intended to run on the Nautilus strategy/event thread. Any loss of
-        portfolio/client readiness after the strategy has started invalidates the
-        reconciliation gate until a full process restart.
-        """
+        """Refresh operational gates from Nautilus read-only state."""
         with self._readiness_lock:
             probe = self._readiness_probe
 
@@ -182,11 +211,48 @@ class BridgeRuntime:
                 self.reconciliation_ready.clear()
                 self._reconciliation_invalidated = True
 
-            self._assign(self.preview_ready, operational_ok)
-            self._assign(
-                self.trading_ready,
-                operational_ok and self.reconciliation_ready.is_set(),
-            )
+            self._recompute_gates_locked()
+
+    def update_protection_readiness(self, ready: bool, reason: str | None = None) -> None:
+        """Update protection gate from the strategy event-thread scan.
+
+        Missing protection closes trading immediately. To avoid permanently latching on
+        the tiny race while an OCO leg triggers and the position closes, persistent scan
+        failure is required before the restart-only latch is set.
+        """
+        with self._readiness_lock:
+            if self._protection_invalidated:
+                self.protection_ready.clear()
+                self._recompute_gates_locked()
+                return
+
+            if ready:
+                self._protection_failure_count = 0
+                self._protection_reason = None
+                self.protection_ready.set()
+            else:
+                self.protection_ready.clear()
+                self._protection_failure_count += 1
+                self._protection_reason = reason or "protection_not_ready"
+                if self._protection_failure_count >= self.PROTECTION_FAILURE_LATCH_POLLS:
+                    self._protection_invalidated = True
+                    self._protection_reason = (
+                        f"{self._protection_reason};restart_required"
+                    )
+            self._recompute_gates_locked()
+
+    def invalidate_protection(self, reason: str) -> None:
+        """Immediately latch protection fail-closed until process restart."""
+        with self._readiness_lock:
+            self.protection_ready.clear()
+            self._protection_invalidated = True
+            self._protection_failure_count = self.PROTECTION_FAILURE_LATCH_POLLS
+            self._protection_reason = reason or "protection_invalidated_restart_required"
+            self._recompute_gates_locked()
+
+    def protection_reason(self) -> str | None:
+        with self._readiness_lock:
+            return self._protection_reason
 
     def readiness_reason(self) -> str | None:
         with self._readiness_lock:
@@ -204,6 +270,10 @@ class BridgeRuntime:
                 if self._reconciliation_invalidated:
                     return "reconciliation_invalidated_restart_required"
                 return "reconciliation_not_confirmed"
+            if not self.protection_ready.is_set():
+                return self._protection_reason or "protection_not_ready"
+            if self._protection_invalidated:
+                return self._protection_reason or "protection_invalidated_restart_required"
             return None
 
     def readiness_snapshot(self) -> dict[str, bool | str | None]:
@@ -215,8 +285,11 @@ class BridgeRuntime:
                 "reconciliation_ready": self.reconciliation_ready.is_set(),
                 "execution_connected": self.execution_connected.is_set(),
                 "data_connected": self.data_connected.is_set(),
+                "protection_ready": self.protection_ready.is_set(),
                 "preview_ready": self.preview_ready.is_set(),
                 "trading_ready": self.trading_ready.is_set(),
                 "reconciliation_invalidated": self._reconciliation_invalidated,
+                "protection_invalidated": self._protection_invalidated,
                 "readiness_reason": self.readiness_reason(),
+                "protection_reason": self._protection_reason,
             }
