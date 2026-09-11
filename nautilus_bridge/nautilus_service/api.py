@@ -12,12 +12,14 @@ from trading_models import ApprovalRequest, BridgeHealth, CommandResult, IntentS
 
 
 PROTECTIVE_BRACKET_MODE = "OKX_ATTACHED_OCO"
+PROTECTION_SCOPE = "xko_owned_positions_only"
+TARGET_POSITION_POLICY = "target_instrument_must_be_flat_before_submit"
 
 
 def create_app(runtime: BridgeRuntime) -> FastAPI:
     app = FastAPI(
         title="xko Nautilus Bridge",
-        version="0.2.0",
+        version="0.3.0",
         description="Private human-gated bridge from MCP trade intents to NautilusTrader.",
     )
     bridge_api_token = os.getenv("BRIDGE_API_TOKEN", "").strip()
@@ -44,6 +46,8 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             unprotected_entry_enabled=runtime.policy.allow_unprotected_entry,
             protected_submit_only=True,
             protective_bracket_mode=PROTECTIVE_BRACKET_MODE,
+            protection_scope=PROTECTION_SCOPE,
+            target_instrument_position_policy=TARGET_POSITION_POLICY,
             allowed_instruments=sorted(runtime.policy.allowed_instruments),
         )
 
@@ -141,9 +145,9 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
                 ),
             )
 
-        # Operational state is independent from the policy switch. Lost connectivity,
-        # invalid reconciliation, or missing protective stop on any open allowed position
-        # closes this gate before anything can be queued.
+        # Global protection readiness covers XKO-owned positions only. Manual/grid
+        # positions do not globally close this gate; the strategy event thread performs
+        # a second per-intent preflight which requires the target instrument to be flat.
         if not runtime.trading_ready.is_set():
             reason = runtime.readiness_reason() or "not_ready"
             raise HTTPException(
