@@ -141,8 +141,16 @@ class IntentStore:
         equity_used: str | None = None,
         risk_fraction_used: str | None = None,
         nautilus_order_id: str | None = None,
+        stop_loss_order_id: str | None = None,
+        take_profit_order_id: str | None = None,
+        protection_mode: str | None = None,
+        protection_status: str | None = None,
+        protection_verified: bool | None = None,
+        protection_error: str | None = None,
         last_event: str | None = None,
         error: str | None = None,
+        clear_error: bool = False,
+        clear_protection_error: bool = False,
         mark_submitted: bool = False,
     ) -> IntentRecord:
         record = self.get(intent_id)
@@ -156,10 +164,26 @@ class IntentStore:
             record.risk_fraction_used = risk_fraction_used
         if nautilus_order_id is not None:
             record.nautilus_order_id = nautilus_order_id
+        if stop_loss_order_id is not None:
+            record.stop_loss_order_id = stop_loss_order_id
+        if take_profit_order_id is not None:
+            record.take_profit_order_id = take_profit_order_id
+        if protection_mode is not None:
+            record.protection_mode = protection_mode
+        if protection_status is not None:
+            record.protection_status = protection_status
+        if protection_verified is not None:
+            record.protection_verified = protection_verified
+        if protection_error is not None:
+            record.protection_error = protection_error
+        elif clear_protection_error:
+            record.protection_error = None
         if last_event is not None:
             record.last_event = last_event
         if error is not None:
             record.error = error
+        elif clear_error:
+            record.error = None
         if mark_submitted:
             record.submitted_at = IntentRecord.now()
         return self._save(record)
