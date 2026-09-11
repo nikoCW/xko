@@ -87,7 +87,7 @@ class AIIntentStrategy(Strategy):
                 self._handle_command(cmd)
             except Exception as exc:
                 self.log.error(f"Bridge command failed: {exc}")
-                # Preview is read-only. A sizing/validation failure must not mutate the
+                # Preview never submits. A sizing/validation failure must not mutate the
                 # execution lifecycle into ERROR. Submission failures do.
                 if cmd.kind == CommandKind.SUBMIT:
                     self._runtime.store.update_execution(
@@ -102,7 +102,7 @@ class AIIntentStrategy(Strategy):
     def _handle_command(self, cmd: BridgeCommand) -> None:
         record = self._runtime.store.get(cmd.intent_id)
         if cmd.kind == CommandKind.PREVIEW:
-            data = self._size_intent(record)
+            data = self._size_intent(record, validate_bracket=True)
             if cmd.reply is not None:
                 cmd.reply.put_nowait(CommandResult(ok=True, data=data).model_dump(mode="json"))
             return
@@ -293,7 +293,12 @@ class AIIntentStrategy(Strategy):
                 f"protection_scan_error:{type(exc).__name__}:{exc}",
             )
 
-    def _size_intent(self, record: IntentRecord) -> dict[str, Any]:
+    def _size_intent(
+        self,
+        record: IntentRecord,
+        *,
+        validate_bracket: bool = True,
+    ) -> dict[str, Any]:
         """Size only linear OKX perpetual swaps in native contract units."""
         self._require_preview_ready()
         self._validate_policy(record)
@@ -408,6 +413,22 @@ class AIIntentStrategy(Strategy):
         target_instrument_flat = not existing_positions
         existing_position_ownership = self._position_ownership_summary(existing_positions)
 
+        bracket_preview: dict[str, Any] = {}
+        if validate_bracket:
+            if protected_submit_ready:
+                bracket_preview = self._dry_run_protected_bracket(
+                    record,
+                    instrument,
+                    quantity,
+                )
+            else:
+                bracket_preview = {
+                    "bracket_build_validated": False,
+                    "bracket_build_skipped_reason": "take_profit_missing",
+                    "bracket_dry_run_mode": "ORDER_FACTORY_ONLY_NO_SUBMIT",
+                    "venue_submit_called": False,
+                }
+
         self._runtime.store.update_execution(
             record.intent_id,
             sized_quantity=str(quantity),
@@ -457,6 +478,7 @@ class AIIntentStrategy(Strategy):
             "take_profit_type": "MARKET_IF_TOUCHED" if protected_submit_ready else "",
             "trigger_type": "LAST_PRICE",
             "submit_enabled": policy.allow_order_submit,
+            **bracket_preview,
             "warning": (
                 (
                     "Target instrument already has an open position; preview is allowed but XKO submit "
@@ -465,7 +487,8 @@ class AIIntentStrategy(Strategy):
                 if existing_positions
                 else (
                     "Protected execution uses a Nautilus bracket translated by OKX adapter 1.231 "
-                    "to venue-native attached TP/SL. Submission remains policy-gated."
+                    "to venue-native attached TP/SL. Preview constructs and validates the actual "
+                    "OrderFactory bracket but never submits it."
                     if protected_submit_ready
                     else "take_profit is missing; protected submit requires both SL and TP and will refuse execution."
                 )
@@ -523,6 +546,98 @@ class AIIntentStrategy(Strategy):
         bracket = self.order_factory.bracket(**kwargs)
         return bracket, str(stop_client_id), str(tp_client_id)
 
+    def _dry_run_protected_bracket(
+        self,
+        record: IntentRecord,
+        instrument: CryptoPerpetual,
+        quantity: Any,
+    ) -> dict[str, Any]:
+        """Construct and verify the real Nautilus bracket without submitting it anywhere."""
+        bracket, stop_order_id, tp_order_id = self._build_protected_bracket(
+            record,
+            instrument,
+            quantity,
+        )
+        orders = list(bracket.orders)
+        if len(orders) != 3:
+            raise RuntimeError(
+                f"Protected bracket dry-run expected 3 orders, got {len(orders)}"
+            )
+
+        by_client_id = {
+            str(getattr(order, "client_order_id", "")): order
+            for order in orders
+        }
+        entry_order = by_client_id.get(record.client_order_id)
+        stop_order = by_client_id.get(stop_order_id)
+        tp_order = by_client_id.get(tp_order_id)
+        if entry_order is None or stop_order is None or tp_order is None:
+            raise RuntimeError(
+                "Protected bracket dry-run could not resolve ENTRY/STOP_LOSS/TAKE_PROFIT by client order ID"
+            )
+
+        expected_entry_type = (
+            OrderType.LIMIT if record.request.entry_type == EntryType.LIMIT else OrderType.MARKET
+        )
+        expected_entry_side = OrderSide.BUY if record.request.side == Side.BUY else OrderSide.SELL
+        expected_child_side = (
+            OrderSide.SELL if expected_entry_side == OrderSide.BUY else OrderSide.BUY
+        )
+        expected_quantity = str(quantity)
+
+        checks: list[tuple[bool, str]] = [
+            (entry_order.order_type == expected_entry_type, "entry_order_type"),
+            (entry_order.side == expected_entry_side, "entry_side"),
+            (str(entry_order.quantity) == expected_quantity, "entry_quantity"),
+            (not bool(entry_order.is_reduce_only), "entry_reduce_only_false"),
+            (stop_order.order_type == OrderType.STOP_MARKET, "stop_order_type"),
+            (stop_order.side == expected_child_side, "stop_side"),
+            (str(stop_order.quantity) == expected_quantity, "stop_quantity"),
+            (bool(stop_order.is_reduce_only), "stop_reduce_only"),
+            (tp_order.order_type == OrderType.MARKET_IF_TOUCHED, "take_profit_order_type"),
+            (tp_order.side == expected_child_side, "take_profit_side"),
+            (str(tp_order.quantity) == expected_quantity, "take_profit_quantity"),
+            (bool(tp_order.is_reduce_only), "take_profit_reduce_only"),
+        ]
+        failed = [name for ok, name in checks if not ok]
+        if failed:
+            raise RuntimeError(
+                "Protected bracket dry-run invariant failure: " + ",".join(failed)
+            )
+
+        stop_trigger_type = getattr(stop_order, "trigger_type", None)
+        tp_trigger_type = getattr(tp_order, "trigger_type", None)
+        if stop_trigger_type is not None and stop_trigger_type != TriggerType.LAST_PRICE:
+            raise RuntimeError(
+                f"Protected bracket dry-run stop trigger mismatch: {stop_trigger_type}"
+            )
+        if tp_trigger_type is not None and tp_trigger_type != TriggerType.LAST_PRICE:
+            raise RuntimeError(
+                f"Protected bracket dry-run take-profit trigger mismatch: {tp_trigger_type}"
+            )
+
+        return {
+            "bracket_build_validated": True,
+            "bracket_dry_run_mode": "ORDER_FACTORY_ONLY_NO_SUBMIT",
+            "bracket_order_count": len(orders),
+            "entry_client_order_id": str(entry_order.client_order_id),
+            "entry_order_type": str(entry_order.order_type),
+            "entry_side": str(entry_order.side),
+            "entry_quantity": str(entry_order.quantity),
+            "entry_reduce_only": bool(entry_order.is_reduce_only),
+            "stop_loss_client_order_id": str(stop_order.client_order_id),
+            "stop_loss_order_type": str(stop_order.order_type),
+            "stop_loss_side": str(stop_order.side),
+            "stop_loss_quantity": str(stop_order.quantity),
+            "stop_loss_reduce_only": bool(stop_order.is_reduce_only),
+            "take_profit_client_order_id": str(tp_order.client_order_id),
+            "take_profit_order_type": str(tp_order.order_type),
+            "take_profit_side": str(tp_order.side),
+            "take_profit_quantity": str(tp_order.quantity),
+            "take_profit_reduce_only": bool(tp_order.is_reduce_only),
+            "venue_submit_called": False,
+        }
+
     def _submit_intent(self, record: IntentRecord) -> None:
         if record.status != IntentStatus.QUEUED:
             raise ValueError(f"Expected QUEUED before execution, got {record.status}")
@@ -539,7 +654,7 @@ class AIIntentStrategy(Strategy):
         request = record.request
         instrument_id = InstrumentId.from_str(request.instrument_id)
         self._require_target_instrument_flat(instrument_id)
-        sizing = self._size_intent(record)
+        sizing = self._size_intent(record, validate_bracket=False)
         instrument = self.cache.instrument(instrument_id)
         if instrument is None:
             raise RuntimeError(f"Instrument disappeared from cache: {instrument_id}")
