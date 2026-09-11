@@ -86,6 +86,18 @@ Protection ownership is scoped to XKO. The global `protection_ready` scan only e
 
 If an XKO-owned open position has no live XKO stop-loss child, `protection_ready` closes immediately; persistent failure becomes restart-required fail-closed state.
 
+## Contract quantity limits
+
+OKX SWAP contract units are instrument-specific, so one global contract-count cap can distort risk across BTC, ETH, HYPE, and other swaps. XKO now supports per-instrument caps:
+
+```text
+MAX_ORDER_QTY=10
+MAX_ORDER_QTY_BY_INSTRUMENT=BTC-USDT-SWAP.OKX:10,ETH-USDT-SWAP.OKX:50,HYPE-USDT-SWAP.OKX:100
+MAX_NOTIONAL_PER_ORDER_USDT=5000
+```
+
+`MAX_ORDER_QTY_BY_INSTRUMENT` takes precedence for matching instruments. `MAX_ORDER_QTY` remains a fail-safe fallback for an allowed instrument without an explicit override. Sizing still applies the strictest of risk-derived quantity, instrument contract cap, notional cap, and venue max quantity, then rounds down to the venue size increment. Preview exposes the effective cap and its source.
+
 ## Safety defaults
 
 Keep these values while validating the protected path:
