@@ -1,0 +1,32 @@
+[Unit]
+Description=XKO local-only shadow operator dashboard
+After=network-online.target xko-nautilus-bridge.service
+Wants=network-online.target
+Requires=xko-nautilus-bridge.service
+
+[Service]
+Type=simple
+User=xko
+Group=xko
+WorkingDirectory=/opt/xko
+EnvironmentFile=/etc/xko/nautilus-bridge.env
+Environment=SHADOW_DASHBOARD_HOST=127.0.0.1
+Environment=SHADOW_DASHBOARD_PORT=8766
+Environment=SHADOW_REVIEW_DB_PATH=/var/lib/xko-nautilus/shadow-reviews.db
+ExecStart=/opt/xko/.venv/bin/python /opt/xko/deploy/aws-ec2/shadow_dashboard.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadOnlyPaths=/opt/xko /etc/xko
+ReadWritePaths=/var/lib/xko-nautilus
+
+[Install]
+WantedBy=multi-user.target
