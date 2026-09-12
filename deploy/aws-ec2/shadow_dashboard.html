@@ -5,328 +5,59 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>xko Shadow Operator Dashboard</title>
   <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0b0f14;
-      --panel: #121923;
-      --panel2: #0f151e;
-      --line: #243140;
-      --text: #e8eef5;
-      --muted: #8ea0b4;
-      --good: #3ddc97;
-      --warn: #ffbf69;
-      --bad: #ff6b6b;
-      --accent: #70a5ff;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    header { position: sticky; top: 0; z-index: 10; background: rgba(11,15,20,.96); border-bottom: 1px solid var(--line); backdrop-filter: blur(12px); }
-    .wrap { max-width: 1500px; margin: 0 auto; padding: 18px 22px; }
-    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
-    h1 { margin:0; font-size:22px; letter-spacing:.2px; }
-    .subtitle { color:var(--muted); font-size:13px; margin-top:4px; }
-    .pill { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:999px; padding:7px 11px; font-size:12px; font-weight:700; }
-    .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
-    .good .dot { background:var(--good); }
-    .warn .dot { background:var(--warn); }
-    .bad .dot { background:var(--bad); }
-    button { background:#182230; color:var(--text); border:1px solid #314257; border-radius:9px; padding:9px 12px; cursor:pointer; font-weight:650; }
-    button:hover { border-color:var(--accent); }
-    button.primary { background:#17345f; border-color:#315f9f; }
-    button.dangerless { background:#2a2416; border-color:#66512a; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    .banner { margin:18px 0; padding:14px 16px; border:1px solid #5a4720; background:#211a0d; border-radius:12px; color:#ffd98c; }
-    .banner strong { color:#fff2ce; }
-    .critical { border-color:#6f2e2e; background:#261212; color:#ffc0c0; }
-    .grid { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:14px; }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px; min-width:0; }
-    .span12 { grid-column:span 12; }
-    .span8 { grid-column:span 8; }
-    .span7 { grid-column:span 7; }
-    .span6 { grid-column:span 6; }
-    .span5 { grid-column:span 5; }
-    .span4 { grid-column:span 4; }
-    .title { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; }
-    .title h2 { margin:0; font-size:15px; }
-    .small { color:var(--muted); font-size:12px; }
-    .metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
-    .metric { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:11px; }
-    .metric .label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
-    .metric .value { margin-top:6px; font-size:16px; font-weight:750; overflow-wrap:anywhere; }
-    .check { display:flex; gap:10px; padding:9px 0; border-bottom:1px solid rgba(36,49,64,.65); }
-    .check:last-child { border-bottom:0; }
-    .checkmark { width:20px; flex:0 0 20px; font-weight:900; }
-    .ok { color:var(--good); }
-    .no { color:var(--bad); }
-    table { width:100%; border-collapse:collapse; font-size:12px; }
-    th { text-align:left; color:var(--muted); font-weight:650; border-bottom:1px solid var(--line); padding:9px 7px; position:sticky; top:0; background:var(--panel); }
-    td { border-bottom:1px solid rgba(36,49,64,.45); padding:9px 7px; vertical-align:top; }
-    tr.intent-row { cursor:pointer; }
-    tr.intent-row:hover { background:#17202b; }
-    tr.selected { background:#17283f; }
-    .table-scroll { overflow:auto; max-height:420px; }
-    pre { margin:0; white-space:pre-wrap; word-break:break-word; font-size:12px; color:#c9d6e3; background:#0c1219; border:1px solid var(--line); border-radius:9px; padding:11px; max-height:320px; overflow:auto; }
-    label { display:block; color:var(--muted); font-size:12px; margin-bottom:5px; }
-    input, textarea { width:100%; background:#0d141c; color:var(--text); border:1px solid #2c3a4b; border-radius:8px; padding:9px 10px; font:inherit; }
-    textarea { min-height:80px; resize:vertical; }
-    .form-row { display:grid; grid-template-columns:1fr 2fr; gap:10px; }
-    .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-    .muted-box { padding:10px 12px; background:#0d141c; border:1px solid var(--line); border-radius:9px; color:var(--muted); font-size:12px; }
-    .alert-list { margin:0; padding-left:18px; }
-    .alert-list li { margin:7px 0; color:#ffc2c2; }
-    footer { color:var(--muted); font-size:11px; text-align:center; padding:22px; }
-    @media (max-width: 1000px) {
-      .span8,.span7,.span6,.span5,.span4 { grid-column:span 12; }
-      .metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-    }
-    @media (max-width: 600px) {
-      .wrap { padding:14px; }
-      .metric-grid,.form-row { grid-template-columns:1fr; }
-    }
+    :root{color-scheme:dark;--bg:#0b0f14;--panel:#121923;--panel2:#0f151e;--line:#243140;--text:#e8eef5;--muted:#8ea0b4;--good:#3ddc97;--warn:#ffbf69;--bad:#ff6b6b;--accent:#70a5ff}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    header{position:sticky;top:0;z-index:10;background:rgba(11,15,20,.96);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}
+    .wrap{max-width:1500px;margin:0 auto;padding:18px 22px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    h1{margin:0;font-size:22px}.subtitle,.small{color:var(--muted);font-size:12px}.subtitle{margin-top:4px;font-size:13px}
+    .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:999px;padding:7px 11px;font-size:12px;font-weight:700}.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+    .good .dot{background:var(--good)}.warn .dot{background:var(--warn)}.bad .dot{background:var(--bad)}.ok{color:var(--good)}.no{color:var(--bad)}
+    button{background:#182230;color:var(--text);border:1px solid #314257;border-radius:9px;padding:9px 12px;cursor:pointer;font-weight:650}button:hover{border-color:var(--accent)}button.primary{background:#17345f;border-color:#315f9f}button.dangerless{background:#2a2416;border-color:#66512a}button:disabled{opacity:.45;cursor:not-allowed}
+    .banner{margin:18px 0;padding:14px 16px;border:1px solid #5a4720;background:#211a0d;border-radius:12px;color:#ffd98c}.banner strong{color:#fff2ce}.critical{border-color:#6f2e2e;background:#261212;color:#ffc0c0}
+    .grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px;min-width:0}.span8{grid-column:span 8}.span7{grid-column:span 7}.span6{grid-column:span 6}.span5{grid-column:span 5}.span4{grid-column:span 4}
+    .title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.title h2{margin:0;font-size:15px}.metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.metric{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px}.metric .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px}.metric .value{margin-top:6px;font-size:16px;font-weight:750;overflow-wrap:anywhere}
+    .check{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid rgba(36,49,64,.65)}.check:last-child{border-bottom:0}.checkmark{width:20px;flex:0 0 20px;font-weight:900}
+    table{width:100%;border-collapse:collapse;font-size:12px}th{text-align:left;color:var(--muted);font-weight:650;border-bottom:1px solid var(--line);padding:9px 7px;position:sticky;top:0;background:var(--panel)}td{border-bottom:1px solid rgba(36,49,64,.45);padding:9px 7px;vertical-align:top}tr.intent-row{cursor:pointer}tr.intent-row:hover{background:#17202b}tr.selected{background:#17283f}.table-scroll{overflow:auto;max-height:420px}
+    pre{margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;color:#c9d6e3;background:#0c1219;border:1px solid var(--line);border-radius:9px;padding:11px;max-height:320px;overflow:auto}
+    label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}input,textarea{width:100%;background:#0d141c;color:var(--text);border:1px solid #2c3a4b;border-radius:8px;padding:9px 10px;font:inherit}textarea{min-height:80px;resize:vertical}.form-row{display:grid;grid-template-columns:1fr 2fr;gap:10px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.muted-box{padding:10px 12px;background:#0d141c;border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:12px}.alert-list{margin:0;padding-left:18px}.alert-list li{margin:7px 0;color:#ffc2c2}
+    .gate{display:none;margin-top:10px;padding:12px 13px;border-radius:10px;border:1px solid var(--line);background:#0d141c}.gate.show{display:block}.gate.pass{border-color:#275c48;background:#0d2119}.gate.block{border-color:#713232;background:#271313}.gate .gate-title{font-size:14px;font-weight:800}.gate .gate-line{margin-top:6px;font-size:12px}.gate .blocker{display:inline-block;margin:5px 5px 0 0;padding:4px 7px;border-radius:6px;background:#441c1c;color:#ffc2c2;font:700 11px ui-monospace,SFMono-Regular,Menlo,monospace}.gate .shadow-lock{margin-top:8px;color:#ffd98c;font-size:12px}
+    footer{color:var(--muted);font-size:11px;text-align:center;padding:22px}@media(max-width:1000px){.span8,.span7,.span6,.span5,.span4{grid-column:span 12}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.wrap{padding:14px}.metric-grid,.form-row{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-<header>
-  <div class="wrap top">
-    <div>
-      <h1>xko Shadow Operator Dashboard v1</h1>
-      <div class="subtitle">真实账户观察 / sizing / bracket preview / 人工审阅；本面板没有 approve 或 submit 能力</div>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <span id="modePill" class="pill"><span class="dot"></span><span id="modeText">LOADING</span></span>
-      <button id="refreshBtn">刷新</button>
-      <label style="display:flex;align-items:center;gap:7px;margin:0;color:var(--muted)"><input id="autoRefresh" type="checkbox" checked style="width:auto" />15s 自动刷新</label>
-    </div>
-  </div>
-</header>
-
+<header><div class="wrap top"><div><h1>xko Shadow Operator Dashboard v1.1</h1><div class="subtitle">真实账户观察 / sizing / bracket preview / intent preflight / 人工审阅；本面板没有 approve 或 submit 能力</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span id="modePill" class="pill"><span class="dot"></span><span id="modeText">LOADING</span></span><button id="refreshBtn">刷新</button><label style="display:flex;align-items:center;gap:7px;margin:0;color:var(--muted)"><input id="autoRefresh" type="checkbox" checked style="width:auto" />15s 自动刷新</label></div></div></header>
 <main class="wrap">
   <div id="mainBanner" class="banner"><strong>SHADOW MODE</strong>：正在读取真实 bridge 状态，但不会通过本面板发送真实订单。</div>
   <div id="alertsBox" class="banner critical" style="display:none"></div>
-
   <section class="grid">
-    <div class="card span8">
-      <div class="title"><h2>Bridge 状态</h2><span id="asOf" class="small">-</span></div>
-      <div id="metrics" class="metric-grid"></div>
-    </div>
-
-    <div class="card span4">
-      <div class="title"><h2>Go-live readiness</h2><span id="goLivePill" class="pill bad"><span class="dot"></span><span>NOT READY</span></span></div>
-      <div id="checklist"></div>
-    </div>
-
-    <div class="card span7">
-      <div class="title"><h2>最近 TradeIntent</h2><span class="small">点击一行查看</span></div>
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th>时间</th><th>Instrument</th><th>Side</th><th>Risk</th><th>Status</th><th>Qty</th></tr></thead>
-          <tbody id="intentRows"></tbody>
-        </table>
-      </div>
-    </div>
-
+    <div class="card span8"><div class="title"><h2>Bridge 状态</h2><span id="asOf" class="small">-</span></div><div id="metrics" class="metric-grid"></div></div>
+    <div class="card span4"><div class="title"><h2>Go-live readiness</h2><span id="goLivePill" class="pill bad"><span class="dot"></span><span>NOT READY</span></span></div><div id="checklist"></div></div>
+    <div class="card span7"><div class="title"><h2>最近 TradeIntent</h2><span class="small">点击一行查看</span></div><div class="table-scroll"><table><thead><tr><th>时间</th><th>Instrument</th><th>Side</th><th>Risk</th><th>Status</th><th>Qty</th></tr></thead><tbody id="intentRows"></tbody></table></div></div>
     <div class="card span5">
       <div class="title"><h2>Intent 详情</h2><span id="selectedId" class="small">未选择</span></div>
       <div id="intentDetail" class="muted-box">选择左侧 intent。</div>
-      <div class="actions">
-        <button id="previewBtn" class="primary" disabled>运行 bracket preview</button>
-      </div>
+      <div class="actions"><button id="previewBtn" class="primary" disabled>运行 bracket preview</button></div>
+      <div id="intentGate" class="gate"><div id="gateTitle" class="gate-title"></div><div id="gateBody" class="gate-line"></div><div id="gateBlockers"></div><div class="shadow-lock">SHADOW EXECUTION：始终禁用；ALLOW_ORDER_SUBMIT=false。</div></div>
       <div style="margin-top:10px"><pre id="previewOutput">尚未运行 preview。</pre></div>
     </div>
-
-    <div class="card span6">
-      <div class="title"><h2>人工审阅记录</h2><span class="small">仅审阅，不改变 intent 状态</span></div>
-      <div class="form-row">
-        <div><label for="operator">Operator</label><input id="operator" maxlength="64" placeholder="例如 niko" /></div>
-        <div><label for="note">Note</label><textarea id="note" maxlength="1000" placeholder="记录为什么这条 shadow trade 合理/不合理，或需要关注的风险"></textarea></div>
-      </div>
-      <div class="actions">
-        <button id="reviewBtn" class="dangerless" disabled>标记为已审阅（NO TRADE）</button>
-      </div>
-      <div class="small" style="margin-top:8px">审阅记录保存到单独的 shadow_reviews.db；不会调用 /approve，也不会调用 /submit。</div>
-    </div>
-
-    <div class="card span6">
-      <div class="title"><h2>最近审阅</h2><span class="small">audit trail</span></div>
-      <div class="table-scroll" style="max-height:300px">
-        <table>
-          <thead><tr><th>时间</th><th>Intent</th><th>Operator</th><th>Status</th><th>Note</th></tr></thead>
-          <tbody id="reviewRows"></tbody>
-        </table>
-      </div>
-    </div>
+    <div class="card span6"><div class="title"><h2>人工审阅记录</h2><span class="small">仅审阅，不改变 intent 状态</span></div><div class="form-row"><div><label for="operator">Operator</label><input id="operator" maxlength="64" placeholder="例如 niko" /></div><div><label for="note">Note</label><textarea id="note" maxlength="1000" placeholder="记录为什么这条 shadow trade 合理/不合理，或需要关注的风险"></textarea></div></div><div class="actions"><button id="reviewBtn" class="dangerless" disabled>标记为已审阅（NO TRADE）</button></div><div class="small" style="margin-top:8px">审阅记录保存到单独的 shadow_reviews.db；不会调用 /approve，也不会调用 /submit。</div></div>
+    <div class="card span6"><div class="title"><h2>最近审阅</h2><span class="small">audit trail</span></div><div class="table-scroll" style="max-height:300px"><table><thead><tr><th>时间</th><th>Intent</th><th>Operator</th><th>Status</th><th>Note</th></tr></thead><tbody id="reviewRows"></tbody></table></div></div>
   </section>
 </main>
-<footer>Local-only operator surface · bind 127.0.0.1:8766 · access through SSH port-forward</footer>
-
+<footer>Dashboard binds 127.0.0.1:8766 only · remote access should stay behind authenticated HTTPS reverse proxy</footer>
 <script>
-  let state = null;
-  let selectedIntent = null;
-  let lastPreview = {};
-  let timer = null;
-
-  const $ = (id) => document.getElementById(id);
-  const fmtTime = (v) => { if (!v) return '-'; try { return new Date(v).toLocaleString(); } catch { return String(v); } };
-  const text = (el, value) => { el.textContent = value == null ? '-' : String(value); };
-  const badgeClass = (ok) => ok ? 'ok' : 'no';
-
-  async function api(path, options={}) {
-    const res = await fetch(path, {cache:'no-store', headers:{'Content-Type':'application/json'}, ...options});
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-    return data;
-  }
-
-  function metric(label, value) {
-    const box = document.createElement('div'); box.className='metric';
-    const l=document.createElement('div'); l.className='label'; l.textContent=label;
-    const v=document.createElement('div'); v.className='value'; v.textContent=value == null ? '-' : String(value);
-    box.append(l,v); return box;
-  }
-
-  function renderState(s) {
-    state = s;
-    text($('asOf'), `updated ${fmtTime(s.as_of)}`);
-    const mode = s.mode || 'UNKNOWN';
-    text($('modeText'), mode);
-    $('modePill').className = `pill ${mode === 'LIVE_SHADOW' || mode === 'DEMO_SHADOW' ? 'good' : 'bad'}`;
-    $('mainBanner').className = mode === 'UNSAFE_CONFIGURATION' ? 'banner critical' : 'banner';
-    $('mainBanner').innerHTML = mode === 'UNSAFE_CONFIGURATION'
-      ? '<strong>UNSAFE CONFIGURATION</strong>：至少一个执行安全开关不是关闭状态，preview/review 已锁定。'
-      : '<strong>SHADOW MODE</strong>：真实环境观察、preview 和人工审阅；本面板没有 approve 或 submit 能力。';
-
-    const h = s.health || {};
-    const metrics = $('metrics'); metrics.replaceChildren();
-    [
-      ['Environment', h.okx_environment],
-      ['Bridge ready', h.ready],
-      ['Reconciliation', h.reconciliation_ready],
-      ['Protection', h.protection_ready],
-      ['Preview ready', h.preview_ready],
-      ['Trading ready', h.trading_ready],
-      ['Submit enabled', h.order_submit_enabled],
-      ['Protected mode', h.protective_bracket_mode],
-      ['Protection scope', h.protection_scope],
-      ['Allowed instruments', (h.allowed_instruments || []).join(', ')],
-      ['Default qty cap', h.max_order_qty_default],
-      ['Readiness reason', h.readiness_reason || '-']
-    ].forEach(([k,v]) => metrics.appendChild(metric(k,v)));
-
-    const checklist = $('checklist'); checklist.replaceChildren();
-    (s.checklist || []).forEach(item => {
-      const row=document.createElement('div'); row.className='check';
-      const mark=document.createElement('div'); mark.className=`checkmark ${badgeClass(item.ok)}`; mark.textContent=item.ok?'✓':'✕';
-      const body=document.createElement('div');
-      const name=document.createElement('div'); name.textContent=item.name; name.style.fontWeight='700';
-      const detail=document.createElement('div'); detail.className='small'; detail.textContent=item.detail;
-      body.append(name,detail); row.append(mark,body); checklist.appendChild(row);
-    });
-    $('goLivePill').className = `pill ${s.go_live_ready ? 'good' : 'bad'}`;
-    $('goLivePill').querySelector('span:last-child').textContent = s.go_live_ready ? 'READY' : 'NOT READY';
-
-    const alerts = s.alerts || [];
-    if (alerts.length) {
-      $('alertsBox').style.display='block';
-      const ul=document.createElement('ul'); ul.className='alert-list';
-      alerts.forEach(a=>{const li=document.createElement('li'); li.textContent=a; ul.appendChild(li);});
-      $('alertsBox').replaceChildren(ul);
-    } else $('alertsBox').style.display='none';
-
-    renderIntents(s.intents || []);
-    renderReviews(s.reviews || []);
-    if (selectedIntent) {
-      const fresh=(s.intents || []).find(x=>x.intent_id===selectedIntent.intent_id);
-      if (fresh) { selectedIntent=fresh; renderSelected(); }
-    }
-  }
-
-  function renderIntents(intents) {
-    const body=$('intentRows'); body.replaceChildren();
-    intents.forEach(item=>{
-      const tr=document.createElement('tr'); tr.className='intent-row'+(selectedIntent?.intent_id===item.intent_id?' selected':'');
-      const r=item.request || {};
-      [fmtTime(item.created_at), r.instrument_id, r.side, r.risk_pct, item.status, item.sized_quantity || '-'].forEach(v=>{
-        const td=document.createElement('td'); td.textContent=v == null?'-':String(v); tr.appendChild(td);
-      });
-      tr.addEventListener('click',()=>{selectedIntent=item; lastPreview={}; renderSelected(); renderIntents(intents);});
-      body.appendChild(tr);
-    });
-  }
-
-  function renderSelected() {
-    if (!selectedIntent) return;
-    text($('selectedId'), selectedIntent.intent_id);
-    const r=selectedIntent.request || {};
-    const lines = [
-      `instrument: ${r.instrument_id || '-'}`,
-      `side: ${r.side || '-'}`,
-      `entry_type: ${r.entry_type || '-'}`,
-      `entry: ${r.entry_price || '-'}`,
-      `stop: ${r.stop_loss || '-'}`,
-      `take_profit: ${r.take_profit || '-'}`,
-      `risk_pct: ${r.risk_pct || '-'}`,
-      `status: ${selectedIntent.status || '-'}`,
-      `sized_quantity: ${selectedIntent.sized_quantity || '-'}`,
-      `protection_status: ${selectedIntent.protection_status || '-'}`,
-      `protection_verified: ${selectedIntent.protection_verified}`,
-      `error: ${selectedIntent.error || '-'}`,
-      `reason: ${r.reason || '-'}`
-    ];
-    $('intentDetail').textContent=lines.join('\n');
-    $('previewBtn').disabled = state?.mode === 'UNSAFE_CONFIGURATION';
-    $('reviewBtn').disabled = state?.mode === 'UNSAFE_CONFIGURATION';
-    $('previewOutput').textContent = Object.keys(lastPreview).length ? JSON.stringify(lastPreview,null,2) : '尚未运行 preview。';
-  }
-
-  function renderReviews(reviews) {
-    const body=$('reviewRows'); body.replaceChildren();
-    reviews.forEach(r=>{
-      const tr=document.createElement('tr');
-      [fmtTime(r.reviewed_at), (r.intent_id || '').slice(0,8), r.operator, r.intent_status, r.note || '-'].forEach(v=>{
-        const td=document.createElement('td'); td.textContent=String(v ?? '-'); tr.appendChild(td);
-      }); body.appendChild(tr);
-    });
-  }
-
-  async function refresh() {
-    $('refreshBtn').disabled=true;
-    try { renderState(await api('/api/state')); }
-    catch (e) {
-      $('alertsBox').style.display='block'; $('alertsBox').textContent=`Dashboard error: ${e.message}`;
-      $('modePill').className='pill bad'; text($('modeText'),'OFFLINE');
-    } finally { $('refreshBtn').disabled=false; }
-  }
-
-  $('refreshBtn').addEventListener('click', refresh);
-  $('previewBtn').addEventListener('click', async ()=>{
-    if (!selectedIntent) return;
-    $('previewBtn').disabled=true; $('previewOutput').textContent='running preview...';
-    try { lastPreview=await api(`/api/preview/${encodeURIComponent(selectedIntent.intent_id)}`,{method:'POST',body:'{}'}); $('previewOutput').textContent=JSON.stringify(lastPreview,null,2); }
-    catch(e) { lastPreview={}; $('previewOutput').textContent=`PREVIEW ERROR: ${e.message}`; }
-    finally { $('previewBtn').disabled=false; }
-  });
-
-  $('reviewBtn').addEventListener('click', async ()=>{
-    if (!selectedIntent) return;
-    const operator=$('operator').value.trim();
-    if (!operator) { alert('请输入 Operator 名称。'); return; }
-    $('reviewBtn').disabled=true;
-    try {
-      await api(`/api/review/${encodeURIComponent(selectedIntent.intent_id)}`,{
-        method:'POST', body:JSON.stringify({operator,note:$('note').value,preview:lastPreview})
-      });
-      $('note').value='';
-      await refresh();
-    } catch(e) { alert(`记录失败: ${e.message}`); }
-    finally { $('reviewBtn').disabled=false; }
-  });
-
-  $('autoRefresh').addEventListener('change',()=>{
-    if (timer) clearInterval(timer);
-    timer = $('autoRefresh').checked ? setInterval(refresh,15000) : null;
-  });
-  timer=setInterval(refresh,15000);
-  refresh();
+let state=null,selectedIntent=null,lastPreview={},timer=null;
+const $=id=>document.getElementById(id);const fmtTime=v=>{if(!v)return'-';try{return new Date(v).toLocaleString()}catch{return String(v)}};const text=(el,v)=>{el.textContent=v==null?'-':String(v)};const badgeClass=ok=>ok?'ok':'no';
+async function api(path,options={}){const res=await fetch(path,{cache:'no-store',headers:{'Content-Type':'application/json'},...options});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.detail||`HTTP ${res.status}`);return data}
+function metric(label,value){const box=document.createElement('div');box.className='metric';const l=document.createElement('div');l.className='label';l.textContent=label;const v=document.createElement('div');v.className='value';v.textContent=value==null?'-':String(value);box.append(l,v);return box}
+function assessPreview(payload){const d=payload&&payload.data&&typeof payload.data==='object'?payload.data:{};const blockers=[];if(payload?.ok!==true)blockers.push('PREVIEW_FAILED');if(d.preview_ready!==true)blockers.push('PREVIEW_NOT_READY');if(d.trading_ready!==true)blockers.push('TRADING_NOT_READY');if(d.protection_ready!==true)blockers.push('PROTECTION_NOT_READY');if(d.protected_submit_ready!==true)blockers.push('PROTECTED_SUBMIT_NOT_READY');if(d.bracket_build_validated!==true)blockers.push('BRACKET_NOT_VALIDATED');if(d.target_instrument_flat!==true)blockers.push('TARGET_INSTRUMENT_NOT_FLAT');if(d.venue_submit_called!==false)blockers.push('UNEXPECTED_VENUE_SUBMIT_ACTIVITY');return{intent_preflight_eligible:blockers.length===0,blockers,execution_enabled:false,disposition:blockers.length?'BLOCKED_NO_TRADE':'PREFLIGHT_OK_NO_TRADE'}}
+function renderGate(payload){const gate=$('intentGate');if(!payload||!Object.keys(payload).length){gate.className='gate';return}const a=payload.shadow_assessment||assessPreview(payload);gate.className=`gate show ${a.intent_preflight_eligible?'pass':'block'}`;text($('gateTitle'),a.intent_preflight_eligible?'INTENT PREFLIGHT: ELIGIBLE (SHADOW ONLY)':'INTENT PREFLIGHT: BLOCKED');text($('gateBody'),a.intent_preflight_eligible?'Per-intent sizing/protection/flatness checks passed. This does not authorize execution.':'This intent must not be submitted. One or more per-intent blockers are active.');const b=$('gateBlockers');b.replaceChildren();(a.blockers||[]).forEach(x=>{const s=document.createElement('span');s.className='blocker';s.textContent=x;b.appendChild(s)})}
+function renderState(s){state=s;text($('asOf'),`updated ${fmtTime(s.as_of)}`);const mode=s.mode||'UNKNOWN';text($('modeText'),mode);$('modePill').className=`pill ${mode==='LIVE_SHADOW'||mode==='DEMO_SHADOW'?'good':'bad'}`;$('mainBanner').className=mode==='UNSAFE_CONFIGURATION'?'banner critical':'banner';$('mainBanner').innerHTML=mode==='UNSAFE_CONFIGURATION'?'<strong>UNSAFE CONFIGURATION</strong>：至少一个执行安全开关不是关闭状态，preview/review 已锁定。':'<strong>SHADOW MODE</strong>：真实环境观察、preview 和人工审阅；本面板没有 approve 或 submit 能力。';const h=s.health||{};const metrics=$('metrics');metrics.replaceChildren();[['Environment',h.okx_environment],['Bridge ready',h.ready],['Reconciliation',h.reconciliation_ready],['Protection',h.protection_ready],['Preview ready',h.preview_ready],['Trading ready',h.trading_ready],['Submit enabled',h.order_submit_enabled],['Protected mode',h.protective_bracket_mode],['Protection scope',h.protection_scope],['Allowed instruments',(h.allowed_instruments||[]).join(', ')],['Default qty cap',h.max_order_qty_default],['Readiness reason',h.readiness_reason||'-']].forEach(([k,v])=>metrics.appendChild(metric(k,v)));const checklist=$('checklist');checklist.replaceChildren();(s.checklist||[]).forEach(item=>{const row=document.createElement('div');row.className='check';const mark=document.createElement('div');mark.className=`checkmark ${badgeClass(item.ok)}`;mark.textContent=item.ok?'✓':'✕';const body=document.createElement('div');const name=document.createElement('div');name.textContent=item.name;name.style.fontWeight='700';const detail=document.createElement('div');detail.className='small';detail.textContent=item.detail;body.append(name,detail);row.append(mark,body);checklist.appendChild(row)});$('goLivePill').className=`pill ${s.go_live_ready?'good':'bad'}`;$('goLivePill').querySelector('span:last-child').textContent=s.go_live_ready?'READY':'NOT READY';const alerts=s.alerts||[];if(alerts.length){$('alertsBox').style.display='block';const ul=document.createElement('ul');ul.className='alert-list';alerts.forEach(a=>{const li=document.createElement('li');li.textContent=a;ul.appendChild(li)});$('alertsBox').replaceChildren(ul)}else $('alertsBox').style.display='none';renderIntents(s.intents||[]);renderReviews(s.reviews||[]);if(selectedIntent){const fresh=(s.intents||[]).find(x=>x.intent_id===selectedIntent.intent_id);if(fresh){selectedIntent=fresh;renderSelected()}}}
+function renderIntents(intents){const body=$('intentRows');body.replaceChildren();intents.forEach(item=>{const tr=document.createElement('tr');tr.className='intent-row'+(selectedIntent?.intent_id===item.intent_id?' selected':'');const r=item.request||{};[fmtTime(item.created_at),r.instrument_id,r.side,r.risk_pct,item.status,item.sized_quantity||'-'].forEach(v=>{const td=document.createElement('td');td.textContent=v==null?'-':String(v);tr.appendChild(td)});tr.addEventListener('click',()=>{selectedIntent=item;lastPreview={};renderSelected();renderIntents(intents)});body.appendChild(tr)})}
+function renderSelected(){if(!selectedIntent)return;text($('selectedId'),selectedIntent.intent_id);const r=selectedIntent.request||{};const lines=[`instrument: ${r.instrument_id||'-'}`,`side: ${r.side||'-'}`,`entry_type: ${r.entry_type||'-'}`,`entry: ${r.entry_price||'-'}`,`stop: ${r.stop_loss||'-'}`,`take_profit: ${r.take_profit||'-'}`,`risk_pct: ${r.risk_pct||'-'}`,`status: ${selectedIntent.status||'-'}`,`sized_quantity: ${selectedIntent.sized_quantity||'-'}`,`protection_status: ${selectedIntent.protection_status||'-'}`,`protection_verified: ${selectedIntent.protection_verified}`,`error: ${selectedIntent.error||'-'}`,`reason: ${r.reason||'-'}`];$('intentDetail').textContent=lines.join('\n');$('previewBtn').disabled=state?.mode==='UNSAFE_CONFIGURATION';$('reviewBtn').disabled=state?.mode==='UNSAFE_CONFIGURATION';$('previewOutput').textContent=Object.keys(lastPreview).length?JSON.stringify(lastPreview,null,2):'尚未运行 preview。';renderGate(lastPreview)}
+function renderReviews(reviews){const body=$('reviewRows');body.replaceChildren();reviews.forEach(r=>{const tr=document.createElement('tr');[fmtTime(r.reviewed_at),(r.intent_id||'').slice(0,8),r.operator,r.intent_status,r.note||'-'].forEach(v=>{const td=document.createElement('td');td.textContent=String(v??'-');tr.appendChild(td)});body.appendChild(tr)})}
+async function refresh(){$('refreshBtn').disabled=true;try{renderState(await api('/api/state'))}catch(e){$('alertsBox').style.display='block';$('alertsBox').textContent=`Dashboard error: ${e.message}`;$('modePill').className='pill bad';text($('modeText'),'OFFLINE')}finally{$('refreshBtn').disabled=false}}
+$('refreshBtn').addEventListener('click',refresh);$('previewBtn').addEventListener('click',async()=>{if(!selectedIntent)return;$('previewBtn').disabled=true;$('previewOutput').textContent='running preview...';try{const raw=await api(`/api/preview/${encodeURIComponent(selectedIntent.intent_id)}`,{method:'POST',body:'{}'});lastPreview={...raw,shadow_assessment:assessPreview(raw)};$('previewOutput').textContent=JSON.stringify(lastPreview,null,2);renderGate(lastPreview)}catch(e){lastPreview={};$('previewOutput').textContent=`PREVIEW ERROR: ${e.message}`;renderGate(lastPreview)}finally{$('previewBtn').disabled=false}});$('reviewBtn').addEventListener('click',async()=>{if(!selectedIntent)return;const operator=$('operator').value.trim();if(!operator){alert('请输入 Operator 名称。');return}$('reviewBtn').disabled=true;try{await api(`/api/review/${encodeURIComponent(selectedIntent.intent_id)}`,{method:'POST',body:JSON.stringify({operator,note:$('note').value,preview:lastPreview})});$('note').value='';await refresh()}catch(e){alert(`记录失败: ${e.message}`)}finally{$('reviewBtn').disabled=false}});$('autoRefresh').addEventListener('change',()=>{if(timer)clearInterval(timer);timer=$('autoRefresh').checked?setInterval(refresh,15000):null});timer=setInterval(refresh,15000);refresh();
 </script>
 </body>
 </html>
