@@ -1,0 +1,27 @@
+[Unit]
+Description=xko NautilusTrader OKX DEMO bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xko
+Group=xko
+WorkingDirectory=/opt/xko/nautilus_bridge
+EnvironmentFile=/etc/xko/nautilus-demo.env
+ExecStart=/opt/xko/.venv/bin/python -m nautilus_service.main
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+UMask=0077
+
+# Demo execution is isolated from the LIVE shadow database and port.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xko-nautilus-demo
+
+[Install]
+WantedBy=multi-user.target
